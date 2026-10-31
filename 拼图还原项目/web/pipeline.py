@@ -552,8 +552,9 @@ def notch_solution_from(out: Path, scaled_json: Path) -> tuple[dict | None, dict
     return {"placed": placed, "polys": polys}, doc
 
 
-def notch_ok(doc: dict, max_overlap: float = 1.0, max_mean_err: float = 0.15) -> tuple[bool, str]:
-    """双射解能不能直接用：必须一一对应、贴得够准、没有明显穿透。"""
+def notch_ok(doc: dict, max_overlap: float = 1.0, max_mean_err: float = 0.15,
+             max_mean_deg: float = 15.0) -> tuple[bool, str]:
+    """双射解能不能直接用：必须一一对应、角度对得上、没有明显穿透。"""
     if not doc.get("bijection_ok"):
         return False, "双射校验未通过"
     ms = doc.get("matches") or []
@@ -561,13 +562,18 @@ def notch_ok(doc: dict, max_overlap: float = 1.0, max_mean_err: float = 0.15) ->
         return False, "没有匹配结果"
     errs = [float(m.get("shape_err", 1.0)) for m in ms]
     mean_err = sum(errs) / len(errs)
+    angs = [float(m.get("angle_err_deg", 0.0)) for m in ms]
+    mean_ang = sum(angs) / len(angs)
     overlap = float((doc.get("coverage") or {}).get("overlap_pct", 100.0))
     gap = float((doc.get("coverage") or {}).get("gap_pct", 100.0))
     if overlap > max_overlap:
         return False, f"重叠 {overlap:.2f}% > {max_overlap}%"
+    if mean_ang > max_mean_deg:
+        return False, f"平均角度误差 {mean_ang:.2f}° > {max_mean_deg}°"
     if mean_err > max_mean_err:
         return False, f"平均形状误差 {mean_err:.3f} > {max_mean_err}"
-    return True, f"平均形状误差 {mean_err:.3f}，重叠 {overlap:.2f}%，缺口 {gap:.2f}%"
+    return True, (f"平均角度差 {mean_ang:.2f}°、形状误差 {mean_err:.3f}，"
+                  f"重叠 {overlap:.2f}%，缺口 {gap:.2f}%")
 
 
 # --------------------------------------------------------------------------
@@ -898,7 +904,8 @@ def solve(
     if applicable:
         step("notch", "1 凹形 + 3 三角形：按比例双射匹配 3 个缺口…")
         _run_soft("notch_ratio_match.py",
-                  ["--pieces", scaled_json, "--out", out, "--match-mode", "shape"],
+                  ["--pieces", scaled_json, "--out", out,
+                   "--match-mode", "angle", "--tol-deg", "15", "--tol-shape", "0.15"],
                   timeout=180, logs_dir=logs)
         notch_sol, notch_doc = notch_solution_from(out, scaled_json)
         if notch_sol is None:
@@ -962,6 +969,7 @@ def solve(
             "chosen": "notch-bijection",
             "notch_matches": [
                 {"triangle": m.get("triangle_label"), "notch": m.get("notch_index"),
+                 "angle_err": round(float(m.get("angle_err_deg", 0.0)), 2),
                  "shape_err": round(float(m.get("shape_err", 0.0)), 4)}
                 for m in (notch_doc.get("matches") or [])
             ],
