@@ -433,31 +433,13 @@ def pair_cost(notch, corner, tol_ratio, tol_deg):
     }
 
 
-def rigid_fit(src, dst):
-    """最小二乘**刚体**变换（只旋转 + 平移，尺度恒为 1，不含镜像）。
-
-    入参 src / dst 是**复数点列**（调用方已经转成 complex）。
-    与 similarity_fit 的区别：相似变换带缩放；这里把 w 的模长强制为 1，
-    于是只能转、只能移，不能变大变小。物理含义：碎片是硬纸片，不允许拉伸或缩小。
-    """
-    n = len(src)
-    zs = [complex(p) for p in src]
-    zd = [complex(p) for p in dst]
-    mz = sum(zs) / n
-    md = sum(zd) / n
-    num = sum((z - mz) * (d - md).conjugate() for z, d in zip(zs, zd))
-    w = num / abs(num) if abs(num) > 1e-12 else complex(1, 0)
-    t = md - w * mz
-    return w, t
-
-
 def place_triangle(tri_verts, corner_idx, notch, order):
     """把三角形放进缺口，返回 (placed_poly, w, t, rms)。
 
-    约束：**只允许平移 + 旋转，不做等比缩放**（w 的模长恒为 1）。
-    在「角 + 两条邻边」三个点上做最小二乘刚体拟合，把误差平摊到两条边上，
-    而不是把全部误差扔给其中一条 —— 这样才是「相互吻合、尽量不留空隙」。
-    两种边序各试一次，取残差小的。
+    这里不用 3 点最小二乘，而是**把该角强制钉在缺口顶点上**：
+    物理上三角形就是「角顶进缺口、两条边贴着缺口两条壁」，所以角点必须重合，
+    误差只能体现在两条边上。做法是拿一条边定出完整的相似变换 w（旋转+缩放，
+    复数除法天然不含镜像），另一条边的残差即 rms。两条边各试一次，取残差小的。
     """
     n = len(tri_verts)
     cur = complex(*tri_verts[corner_idx])
@@ -474,10 +456,11 @@ def place_triangle(tri_verts, corner_idx, notch, order):
 
     best = None
     for (a, na), (b, nb) in options:
-        src = [cur, a, b]
-        dst = [n_cur, na, nb]
-        w, t = rigid_fit(src, dst)
-        rms = math.sqrt(sum(abs(w * z + t - d) ** 2 for z, d in zip(src, dst)) / len(src))
+        if abs(a - cur) < 1e-9:
+            continue
+        w = (na - n_cur) / (a - cur)           # 角点精确重合 + 该边精确贴合
+        t = n_cur - w * cur
+        rms = abs((w * b + t) - nb)            # 另一条边落点误差
         if best is None or rms < best[0]:
             best = (rms, w, t)
     rms, w, t = best
