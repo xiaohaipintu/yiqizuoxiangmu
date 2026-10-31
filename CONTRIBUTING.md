@@ -46,4 +46,13 @@ git rebase --continue
 
 ## 四、上线
 
-每次推送后都要部署上线，并确认线上效果。部署方式见下方（待补充）：
+每次推送后都要部署上线，并确认线上效果。
+
+**本项目用 GitHub Pages 自动部署：**
+
+- 线上地址：<https://xiaohaipintu.github.io/yiqizuoxiangmu/>
+- 部署规则：`master` 分支根目录（`source: master`, `path: /`），**`git push` 到 master 后自动构建上线**，无需手动操作
+- 构建进度：<https://github.com/xiaohaipintu/yiqizuoxiangmu/deployments>
+- 上线后延迟 1～2 分钟生效，浏览器 `Ctrl+F5` 强刷看最新版
+
+由于 Pages 直接发布仓库里的静态文件，**任何能被浏览器打开的东西（含源码、注释、接口地址）都是公开的**。密钥、密码、私有 API Key 一律不要写进仓库 —— 用环境变量或单独的私有仓库。
