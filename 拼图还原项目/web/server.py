@@ -33,13 +33,48 @@ import pipeline  # noqa: E402  (同目录的流水线封装)
 
 INDEX_FILE = WEB_DIR / "index.html"
 MAX_UPLOAD = 25 * 1024 * 1024          # 单张照片上限 25MB
-JOB_TTL = 6 * 3600                     # 任务结果保留 6 小时
+JOB_TTL = 24 * 3600                    # 任务结果（图片）保留 24 小时
 ALLOWED_FILES = {
     "upload.jpg", "assembled.jpg", "41_union_rank.png",
     "upload_labels.jpg", "assembled_labels.jpg",
     "01_mask.png", "02_pieces.png", "beam_solutions.json",
     "best_union.json", "pieces.json", "pieces_scaled.json", "result.json",
+    "run.log", "segment.log", "rescale_pieces.log", "beam_search.log",
+    "eval_union.log", "error.log",
 }
+
+
+# --------------------------------------------------------------------------
+# 日志：任务目录里的 logs/ 会额外归档一份到这里，任务被清理后仍能翻
+# --------------------------------------------------------------------------
+def log_dir() -> Path:
+    p = pipeline.job_root() / "logs"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def log_event(msg: str) -> None:
+    """服务器运行日志（收到任务/完成/出错），按天一个文件。"""
+    try:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_dir() / f"server-{time.strftime('%Y%m%d')}.log", "a",
+                  encoding="utf-8") as fh:
+            fh.write(f"[{stamp}] {msg}\n")
+    except Exception:
+        pass
+
+
+def archive_job_log(job: dict) -> None:
+    """把任务目录里的 logs/ 复制一份到永久归档目录。"""
+    import shutil
+    try:
+        src = Path(job["dir"]) / "logs"
+        if not src.exists():
+            return
+        dst = log_dir() / f"job-{job['id']}"
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    except Exception:
+        pass
 
 JOBS: "OrderedDict[str, dict]" = OrderedDict()
 JOBS_LOCK = threading.Lock()
@@ -124,13 +159,29 @@ def worker() -> None:
             job["progress"] = 100
             job["status"] = "done"
             job["step"] = "完成"
+            log_event(f"任务 {job['id']} 完成：{result.get('pieces')} 块，"
+                      f"{result.get('steps', {}).get('total')}s，"
+                      f"空洞 {result.get('metrics', {}).get('holes_pct')}% / "
+                      f"重叠 {result.get('metrics', {}).get('overlap_pct')}%")
         except Exception as exc:
             job["status"] = "error"
             job["error"] = str(exc)
             job["step"] = "失败"
-            job["log"].append(traceback.format_exc()[-2000:])
+            tb = traceback.format_exc()
+            job["log"].append(tb[-2000:])
+            # 错误也落盘：任务目录 logs/error.log，并记到服务器日志
+            try:
+                logs = Path(job["dir"]) / "logs"
+                logs.mkdir(parents=True, exist_ok=True)
+                with open(logs / "error.log", "a", encoding="utf-8") as fh:
+                    fh.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                             f"任务 {job['id']} 失败 =====\n{tb}\n")
+            except Exception:
+                pass
+            log_event(f"任务 {job['id']} 失败：{exc}")
         finally:
             WORKER_LOCK.release()
+            archive_job_log(job)
             try:
                 if job.get("upload") and Path(job["upload"]).exists():
                     pass  # 保留 upload.jpg 供前端展示"原图/成品"对比
@@ -216,12 +267,25 @@ class Handler(BaseHTTPRequestHandler):
             if name not in ALLOWED_FILES:
                 self._json(403, {"error": "不允许访问该文件"})
                 return
-            target = Path(pipeline.job_root(), job_id, name)
+            base = Path(pipeline.job_root(), job_id)
+            # .log 文件放在任务的 logs/ 子目录里
+            target = (base / "logs" / name) if name.endswith(".log") else (base / name)
             if not target.exists():
-                self._json(404, {"error": "文件不存在"})
-                return
-            ctype = "image/jpeg" if name.endswith(".jpg") else (
-                "image/png" if name.endswith(".png") else "application/json; charset=utf-8")
+                # 任务目录可能已被清理，退回去永久归档里找
+                archived = log_dir() / f"job-{job_id}" / name
+                if archived.exists():
+                    target = archived
+                else:
+                    self._json(404, {"error": "文件不存在"})
+                    return
+            if name.endswith(".jpg"):
+                ctype = "image/jpeg"
+            elif name.endswith(".png"):
+                ctype = "image/png"
+            elif name.endswith(".log"):
+                ctype = "text/plain; charset=utf-8"
+            else:
+                ctype = "application/json; charset=utf-8"
             self._send(200, target.read_bytes(), ctype)
             return
 
@@ -267,6 +331,8 @@ class Handler(BaseHTTPRequestHandler):
         JOB_QUEUE.put(job["id"])
         print(f"[任务 {job['id']}] 收到 {length // 1024}KB 图片，"
               f"beam={job['beam_time']}s concave={job['concave']}")
+        log_event(f"任务 {job['id']} 收到 {length // 1024}KB 图片 "
+                  f"beam={job['beam_time']}s concave={job['concave']}")
         self._json(200, {"id": job["id"]})
 
 
@@ -298,6 +364,7 @@ def main() -> int:
     print(f"  本机访问 : http://127.0.0.1:{args.port}/")
     print(f"  手机访问 : {url}")
     print(f"  任务目录 : {pipeline.job_root()}")
+    print(f"  日志目录 : {log_dir()}")
     print("-" * 58)
     try:
         import qrcode

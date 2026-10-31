@@ -88,6 +88,41 @@ python web/server.py --port 8000
 
 带名称的图：`upload_labels.jpg`（原图标注版）、`assembled_labels.jpg`（成品图标注版）。
 
+## 日志
+
+**每一次任务的每一步都有完整日志**，包括命令行、stdout、stderr、返回码、耗时。
+
+| 位置 | 内容 | 保留 |
+| --- | --- | --- |
+| `%TEMP%\jigsaw-jobs\<job_id>\logs\run.log` | 该任务全部步骤流水（含开始/结束时间戳、最终 result JSON） | 随任务目录，24 小时后清理 |
+| `%TEMP%\jigsaw-jobs\<job_id>\logs\<脚本名>.log` | 单步日志：`segment.log`、`beam_search.log`… | 同上 |
+| `%TEMP%\jigsaw-jobs\<job_id>\logs\error.log` | 只有失败时才有，含完整 traceback | 同上 |
+| `%TEMP%\jigsaw-jobs\logs\job-<job_id>\` | **上面 logs 的永久归档副本**，任务目录被清理后仍然能查 | 永久 |
+| `%TEMP%\jigsaw-jobs\logs\server-YYYYMMDD.log` | 服务器运行日志：收到任务 / 完成 / 失败（含碎片数、耗时、空洞率） | 永久 |
+
+- 页面上：结果卡片 → 展开「查看候选排名图 / 原始分割结果 / 运行日志」→ **打开完整运行日志**按钮
+- 接口：`GET /api/file?id=<job>&n=run.log`
+
+日志长这样：
+
+```
+######################################################################
+# 任务开始 2026-10-31 17:41:33
+# 输入 ...\jigsaw-jobs\484e518c94c9\upload.jpg
+# 参数 beam_time=15.0s concave=True
+# Python 3.13.15  cwd=...\拼图还原项目
+######################################################################
+
+===== 2026-10-31 17:41:36  segment.py  (rc=0, 2.26s) =====
+$ python ...\src\segment.py --image ... --out ... --concave
+--- stdout ---
+图像尺寸: 1802x2400
+共 4 块碎片
+...
+--- stderr ---
+(空)
+```
+
 ## 实现要点（踩过的坑）
 
 1. **成品图不是 `41_union_rank.png`** —— 那张是四个候选并排的排名图。真正的拼好图由 `pipeline.render_assembled()` 现场渲染：读 `best_union.json` 的 `polys` 和 `pieces_scaled.json` 的多边形，用顶点对拟合相似变换，把每个碎片的**真实像素** warp 回位。

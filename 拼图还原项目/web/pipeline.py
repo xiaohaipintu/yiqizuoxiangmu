@@ -49,6 +49,28 @@ def job_root() -> Path:
     return root
 
 
+def write_step_log(logs_dir: Path, script: str, cmd: list, proc, cost: float) -> None:
+    """把每一步的完整命令、stdout、stderr 落盘。
+
+    - `logs/<脚本名>.log`：这一次的完整内容
+    - `logs/run.log`：整个任务的追加流水（含时间戳）
+    """
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        body = (
+            f"\n===== {stamp}  {script}  (rc={proc.returncode}, {cost:.2f}s) =====\n"
+            f"$ {' '.join(str(c) for c in cmd)}\n"
+            f"--- stdout ---\n{proc.stdout or '(空)'}\n"
+            f"--- stderr ---\n{proc.stderr or '(空)'}\n"
+        )
+        (logs_dir / f"{script.replace('.py', '')}.log").write_text(body, encoding="utf-8")
+        with open(logs_dir / "run.log", "a", encoding="utf-8") as fh:
+            fh.write(body)
+    except Exception:
+        pass          # 日志写不进去不能影响主流程
+
+
 # --------------------------------------------------------------------------
 # 基础 IO（统一走 imdecode/imencode，绕开 Windows 下 cv2 不支持中文路径的问题）
 # --------------------------------------------------------------------------
@@ -152,7 +174,8 @@ def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
 # --------------------------------------------------------------------------
 # 调用 src/ 下的脚本
 # --------------------------------------------------------------------------
-def _run(script: str, args: list, timeout: float, log, steps: dict | None = None) -> subprocess.CompletedProcess:
+def _run(script: str, args: list, timeout: float, log, steps: dict | None = None,
+         logs_dir: Path | None = None) -> subprocess.CompletedProcess:
     cmd = [sys.executable, str(SRC_DIR / script)] + [str(a) for a in args]
     started = time.time()
     proc = subprocess.run(
@@ -168,6 +191,8 @@ def _run(script: str, args: list, timeout: float, log, steps: dict | None = None
     cost = time.time() - started
     if steps is not None:
         steps[script.replace(".py", "")] = round(cost, 2)
+    if logs_dir is not None:
+        write_step_log(logs_dir, script, cmd, proc, cost)
     if proc.returncode != 0:
         tail = (proc.stdout or "")[-800:] + "\n" + (proc.stderr or "")[-800:]
         raise RuntimeError(f"{script} 失败 (rc={proc.returncode}):\n{tail.strip()}")
@@ -317,6 +342,19 @@ def solve(
         if log:
             log(name, extra)
 
+    # 日志目录：每步的命令行 / stdout / stderr 全落盘，任务结束也不会丢
+    logs = out / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    with open(logs / "run.log", "a", encoding="utf-8") as fh:
+        fh.write(
+            "\n" + "#" * 70 + "\n"
+            f"# 任务开始 {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"# 输入 {image_path}\n"
+            f"# 参数 beam_time={beam_time}s concave={concave}\n"
+            f"# Python {sys.version.split()[0]}  cwd={PROJ_DIR}\n"
+            + "#" * 70 + "\n"
+        )
+
     # 0) 归一化输入：转存一份到输出目录（cv2 在 Windows 下读不了中文路径），并限制尺寸
     src_img = read_image(image_path)
     h, w = src_img.shape[:2]
@@ -334,7 +372,8 @@ def solve(
     seg_args = ["--image", image_path, "--out", out]
     if concave:
         seg_args.append("--concave")
-    _run("segment.py", seg_args, timeout=180, log=step, steps=steps)
+    _run("segment.py", seg_args, timeout=180, log=step, steps=steps,
+         logs_dir=logs)
     pieces_json = out / "pieces.json"
     if not pieces_json.exists():
         raise RuntimeError("分割失败：没有生成 pieces.json")
@@ -378,14 +417,16 @@ def solve(
     step("rescale", f"{n_pieces} 块，尺度补偿…")
     scaled_json = out / "pieces_scaled.json"
     _run("rescale_pieces.py",
-         ["--pieces", pieces_json, "--out", scaled_json], timeout=120, log=step, steps=steps)
+         ["--pieces", pieces_json, "--out", scaled_json], timeout=120, log=step, steps=steps,
+         logs_dir=logs)
 
     # 3) 束搜索拼合
     step("beam", f"搜索拼法（最多 {int(beam_time)} 秒）…")
     _run("beam_search.py",
          ["--pieces", scaled_json, "--out", out,
           "--beam", "300", "--time", str(float(beam_time))],
-         timeout=beam_time + 240, log=step, steps=steps)
+         timeout=beam_time + 240, log=step, steps=steps,
+         logs_dir=logs)
     sol_json = out / "beam_solutions.json"
     if not sol_json.exists():
         raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
@@ -396,7 +437,8 @@ def solve(
     # 4) 并集评估
     step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
     _run("eval_union.py",
-         ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step, steps=steps)
+         ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step, steps=steps,
+         logs_dir=logs)
 
     # 5) 渲染成品图
     step("render", "按位姿贴回真实像素…")
@@ -440,6 +482,14 @@ def solve(
     (out / "result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    with open(logs / "run.log", "a", encoding="utf-8") as fh:
+        fh.write(
+            "\n" + "=" * 70 + "\n"
+            f"# 任务结束 {time.strftime('%Y-%m-%d %H:%M:%S')}  "
+            f"总耗时 {steps.get('total', 0)}s\n"
+            + "=" * 70 + "\n"
+            + json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+        )
     step("done", "完成")
     return result
 

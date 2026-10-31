@@ -273,9 +273,13 @@
 
     <div class="card" style="margin-top:12px;">
       <details>
-        <summary>查看候选排名图 / 原始分割结果</summary>
+        <summary>查看候选排名图 / 原始分割结果 / 运行日志</summary>
         <img class="result-img" id="img-rank" alt="候选排名" style="margin-top:8px;" />
         <img class="result-img" id="img-mask" alt="分割掩膜" style="margin-top:8px;" />
+        <p style="margin:12px 0 0;">
+          <a class="btn" id="link-log" target="_blank" rel="noopener"
+             style="text-decoration:none;width:100%;">打开完整运行日志（每一步的命令与输出）</a>
+        </p>
       </details>
     </div>
   </section>
@@ -435,8 +439,10 @@
 
   function showResult(jobId, result) {
     current = { jobId: jobId, result: result };
-    $('img-rank').src = '/api/file?id=' + encodeURIComponent(jobId) + '&n=41_union_rank.png';
-    $('img-mask').src = '/api/file?id=' + encodeURIComponent(jobId) + '&n=01_mask.png';
+    var base = '/api/file?id=' + encodeURIComponent(jobId) + '&n=';
+    $('img-rank').src = base + '41_union_rank.png';
+    $('img-mask').src = base + '01_mask.png';
+    $('link-log').href = base + 'run.log';
     paintImages();
     paintLabelTable(result.labels || []);
 
