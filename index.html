@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>拼图项目</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 2rem 1rem;
+    }
+    h1 { font-size: clamp(1.6rem, 5vw, 2.6rem); margin: 0; letter-spacing: .04em; }
+    p { margin: 0; color: #94a3b8; font-size: .95rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 56px);
+      gap: 6px;
+      margin-top: .5rem;
+    }
+    .tile {
+      width: 56px; height: 56px;
+      border-radius: 10px;
+      background: linear-gradient(145deg, #38bdf8, #6366f1);
+      opacity: .85;
+    }
+    .tile:nth-child(5) { background: transparent; border: 2px dashed #475569; }
+    code { background: #1e293b; padding: .15rem .4rem; border-radius: 4px; font-size: .85em; }
+  </style>
+</head>
+<body>
+  <h1>拼图项目</h1>
+  <p>部署链路已打通 · GitHub Pages</p>
+  <div class="grid">
+    <div class="tile"></div><div class="tile"></div><div class="tile"></div>
+    <div class="tile"></div><div class="tile"></div><div class="tile"></div>
+    <div class="tile"></div><div class="tile"></div><div class="tile"></div>
+  </div>
+  <p>这是占位页，替换 <code>index.html</code> 即可改成正式内容。</p>
+</body>
+</html>
