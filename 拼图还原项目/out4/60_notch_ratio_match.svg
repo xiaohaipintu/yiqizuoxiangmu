@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1063.9 566.5 1835.5 1342.1" width="1200" font-family="system-ui,Microsoft YaHei,sans-serif">
+<rect x="-1e6" y="-1e6" width="2e6" height="2e6" fill="#0f172a"/>
+<polygon points="1255.92,1538.05 1291.43,672.65 2167.99,672.65 2801.07,679.75 2797.01,1789.66 2128.43,1807.92 1286.36,1806.90" fill="none" stroke="#475569" stroke-width="3" stroke-dasharray="12 8"/>
+<polygon points="1291.43,672.65 1510.57,1363.55 1255.92,1538.05 1286.36,1806.90 2128.43,1807.92 2206.55,1555.30 2401.34,1796.76 2797.01,1789.66 2801.07,679.75 2470.33,893.82 2167.99,672.65" fill="#334155" stroke="#94a3b8" stroke-width="2"/>
+<polygon points="2206.55,1555.30 2209.66,1810.28 2401.34,1796.76" fill="#2563eb" fill-opacity="0.45" stroke="#2563eb" stroke-width="3"/>
+<text x="2272.5" y="1720.8" fill="#f8fafc" font-size="34" text-anchor="middle">T2→缺口1</text>
+<polygon points="1162.24,746.25 1255.92,1538.05 1510.57,1363.55" fill="#dc2626" fill-opacity="0.45" stroke="#dc2626" stroke-width="3"/>
+<text x="1309.6" y="1216.0" fill="#f8fafc" font-size="34" text-anchor="middle">T4→缺口0</text>
+<polygon points="2167.99,672.65 2470.33,893.82 2722.34,664.88" fill="#059669" fill-opacity="0.45" stroke="#059669" stroke-width="3"/>
+<text x="2453.6" y="743.8" fill="#f8fafc" font-size="34" text-anchor="middle">T5→缺口2</text>
+<circle cx="1510.6" cy="1363.5" r="10" fill="#facc15" stroke="#0f172a" stroke-width="2"/>
+<text x="1528.6" y="1349.5" fill="#facc15" font-size="26">缺口0</text>
+<circle cx="2206.5" cy="1555.3" r="10" fill="#facc15" stroke="#0f172a" stroke-width="2"/>
+<text x="2224.5" y="1541.3" fill="#facc15" font-size="26">缺口1</text>
+<circle cx="2470.3" cy="893.8" r="10" fill="#facc15" stroke="#0f172a" stroke-width="2"/>
+<text x="2488.3" y="879.8" fill="#facc15" font-size="26">缺口2</text>
+<text x="1063.9" y="608.5" fill="#e2e8f0" font-size="40">比例匹配：3 三角形 ↔ 3 缺口</text>
+<text x="1063.9" y="1888.6" fill="#94a3b8" font-size="26">重叠 0.00% · 缺口 3.26% · 外溢 0.72%</text>
+</svg>

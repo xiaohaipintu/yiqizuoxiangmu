@@ -1,0 +1,260 @@
+{
+  "source": "拼图还原项目/out5/pieces_scaled.json",
+  "image": "input\\pieces5.jpg",
+  "tolerance": {
+    "ratio": 0.15,
+    "angle_deg": 15.0
+  },
+  "concave_piece": {
+    "label": 1,
+    "vertices": 11
+  },
+  "notches": [
+    {
+      "notch_index": 0,
+      "vertex_index": 1,
+      "side_in": 724.8218304580087,
+      "side_out": 308.70169583401014,
+      "ratio": 2.3479684117049606,
+      "angle_deg": 106.823222847653,
+      "mouth_chord": 866.1298613256998,
+      "corner": [
+        1510.573270114519,
+        1363.5498344246948
+      ]
+    },
+    {
+      "notch_index": 1,
+      "vertex_index": 5,
+      "side_in": 264.42316981647264,
+      "side_out": 310.2366369512018,
+      "ratio": 0.8523273473276617,
+      "angle_deg": 56.07744716904552,
+      "mouth_chord": 273.13904334351514,
+      "corner": [
+        2206.5469493663145,
+        1555.2976848308017
+      ]
+    },
+    {
+      "notch_index": 2,
+      "vertex_index": 9,
+      "side_in": 393.97172192408607,
+      "side_out": 374.5943576712418,
+      "ratio": 1.051728927187554,
+      "angle_deg": 110.90037195662292,
+      "mouth_chord": 633.1121004127345,
+      "corner": [
+        2470.3270610360914,
+        893.8183278742845
+      ]
+    }
+  ],
+  "triangles": [
+    {
+      "label": 2,
+      "source_vertices": 5,
+      "kept_vertex_indices": [
+        0,
+        1,
+        3
+      ],
+      "vertices": [
+        [
+          1270.3286160867046,
+          2587.7661086904063
+        ],
+        [
+          1294.7134701481289,
+          2942.936809150279
+        ],
+        [
+          1560.8264427314962,
+          2909.010055673515
+        ]
+      ],
+      "corners": [
+        {
+          "corner": 0,
+          "side_in": 433.1127575570059,
+          "side_out": 356.0068083235957,
+          "ratio": 1.2165856029453348,
+          "angle_deg": 38.19516056839112
+        },
+        {
+          "corner": 1,
+          "side_in": 356.0068083235957,
+          "side_out": 268.26691704089995,
+          "ratio": 1.327061913748086,
+          "angle_deg": 86.66212972637844
+        },
+        {
+          "corner": 2,
+          "side_in": 268.26691704089995,
+          "side_out": 433.1127575570059,
+          "ratio": 0.6193927848121419,
+          "angle_deg": 55.142709705230466
+        }
+      ]
+    },
+    {
+      "label": 4,
+      "source_vertices": 4,
+      "kept_vertex_indices": [
+        0,
+        2,
+        3
+      ],
+      "vertices": [
+        [
+          1695.932174609755,
+          2836.8425754883683
+        ],
+        [
+          1980.5775485814356,
+          3599.4372714274227
+        ],
+        [
+          2190.87525024708,
+          3364.7110488612234
+        ]
+      ],
+      "corners": [
+        {
+          "corner": 0,
+          "side_in": 723.6116177220509,
+          "side_out": 813.986277032885,
+          "ratio": 0.8889727482381341,
+          "angle_deg": 22.687680182393688
+        },
+        {
+          "corner": 1,
+          "side_in": 813.986277032885,
+          "side_out": 315.15317368868335,
+          "ratio": 2.5828274787959526,
+          "angle_deg": 62.326582960213386
+        },
+        {
+          "corner": 2,
+          "side_in": 315.15317368868335,
+          "side_out": 723.6116177220509,
+          "ratio": 0.43552807330649845,
+          "angle_deg": 94.98573685739292
+        }
+      ]
+    },
+    {
+      "label": 5,
+      "source_vertices": 4,
+      "kept_vertex_indices": [
+        0,
+        1,
+        2
+      ],
+      "vertices": [
+        [
+          967.0138078370215,
+          3341.210108036955
+        ],
+        [
+          1250.4349276338658,
+          3639.381769384564
+        ],
+        [
+          1567.5715709753158,
+          3441.303068560004
+        ]
+      ],
+      "corners": [
+        {
+          "corner": 0,
+          "side_in": 608.8417098162216,
+          "side_out": 411.380445302995,
+          "ratio": 1.479996720232509,
+          "angle_deg": 36.99052016135097
+        },
+        {
+          "corner": 1,
+          "side_in": 411.380445302995,
+          "side_out": 373.9128538446194,
+          "ratio": 1.1002040744872208,
+          "angle_deg": 101.55888785677207
+        },
+        {
+          "corner": 2,
+          "side_in": 373.9128538446194,
+          "side_out": 608.8417098162216,
+          "ratio": 0.6141380391916393,
+          "angle_deg": 41.45059198187696
+        }
+      ]
+    }
+  ],
+  "matches": [
+    {
+      "triangle_label": 2,
+      "notch_index": 1,
+      "notch_vertex_index": 5,
+      "triangle_corner": 0,
+      "edge_order": "swapped",
+      "scale": 0.7162953100275943,
+      "rotation_deg": 3.228831041892805,
+      "ratio_err": 0.036263633526111214,
+      "angle_err_deg": 17.882286600654403,
+      "length_shape_err": 0.3712123952096127,
+      "rms_px": 81.26379608206143,
+      "cost": 1.192152440043627,
+      "bad_ratio": 0.24175755684074143,
+      "bad_angle": 1.192152440043627,
+      "within_tol": false
+    },
+    {
+      "triangle_label": 4,
+      "notch_index": 0,
+      "notch_vertex_index": 1,
+      "triangle_corner": 2,
+      "edge_order": "swapped",
+      "scale": 0.9795290722312506,
+      "rotation_deg": 13.720720074916647,
+      "ratio_err": 0.022354426073146003,
+      "angle_err_deg": 11.837485990260078,
+      "length_shape_err": 0.011284206863090784,
+      "rms_px": 148.6886129389431,
+      "cost": 0.7891657326840051,
+      "bad_ratio": 0.14902950715430668,
+      "bad_angle": 0.7891657326840051,
+      "within_tol": true
+    },
+    {
+      "triangle_label": 5,
+      "notch_index": 2,
+      "notch_vertex_index": 9,
+      "triangle_corner": 1,
+      "edge_order": "forward",
+      "scale": 0.9105789104665416,
+      "rotation_deg": -10.265744007120968,
+      "ratio_err": 0.04506027752247065,
+      "angle_err_deg": 9.341484099850845,
+      "length_shape_err": 0.02300353002346861,
+      "rms_px": 80.12136694039356,
+      "cost": 0.622765606656723,
+      "bad_ratio": 0.30040185014980436,
+      "bad_angle": 0.622765606656723,
+      "within_tol": true
+    }
+  ],
+  "bijection_ok": true,
+  "unmatched_notches": [],
+  "unmatched_triangles": [],
+  "total_cost": 2.604083779384355,
+  "coverage": {
+    "sample_step_px": 4.828571034532092,
+    "hull_samples": 73987,
+    "hull_area_px2": 1723559.6255037084,
+    "overlap_pct": 0.0,
+    "gap_pct": 3.2559774014353873,
+    "outside_pct": 0.7176936488842635,
+    "piece_pct": 87.76676983794451,
+    "triangles_pct": 8.97725276062011
+  }
+}
