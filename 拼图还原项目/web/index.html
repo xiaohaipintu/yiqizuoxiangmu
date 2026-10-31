@@ -148,6 +148,20 @@
   .piece-head b { font-size: 1.05rem; color: #7dd3fc; }
   .piece-head span { color: var(--dim); font-size: .72rem; }
 
+  /* 最可能的几种拼法（抄自 foweh 分支 371df5e） */
+  .cand-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .cand {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    background: #0b1220;
+  }
+  .cand.on { border-color: var(--accent1); box-shadow: 0 0 0 1px var(--accent1) inset; }
+  .cand img { width: 100%; display: block; background: #fff; }
+  .cand .meta { padding: 6px 8px; font-size: .7rem; color: var(--dim); line-height: 1.5; }
+  .cand .meta b { color: var(--text); font-size: .78rem; }
+  .cand .meta .pick { color: var(--accent1); font-weight: 600; }
+
   .error-box {
     border: 1px solid rgba(248,113,113,.4);
     background: rgba(248,113,113,.08);
@@ -297,6 +311,16 @@
           原图与拼好的图上标的是同一套名字。
         </p>
         <div id="labels-table"></div>
+      </details>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <details open>
+        <summary>最可能的几种拼法（系统按合理性排序，第 1 种即采用）</summary>
+        <p class="label" style="margin:8px 0 0;line-height:1.7;">
+          综合分 = 对接边长度差 + 2×凸包空隙 + 3×空洞/重叠 + 矩形先验 + 轮廓复杂度，越小越合理。
+        </p>
+        <div class="cand-grid" id="cand-grid"></div>
       </details>
     </div>
 
@@ -543,6 +567,7 @@
     $('link-log').href = base + 'run.log';
     paintImages();
     paintLabelTable(result.labels || []);
+    paintCandidates(jobId, result.candidates || []);
     paintJoints(result.joints || [], result.labels || [], result.ranking || {}, result.clean || {});
 
     var m = result.metrics || {};
@@ -582,6 +607,24 @@
         '<div class="piece-head"><b>' + p.name + '</b>' +
         '<span>' + p.vertices + ' 条边 · 面积 ' + Math.round(p.area).toLocaleString() + ' px²</span>' +
         '</div><div class="chip-wrap">' + chips + '</div></div>';
+    }).join('');
+  }
+
+  function paintCandidates(jobId, candidates) {
+    var box = $('cand-grid');
+    if (!box) return;
+    if (!candidates || !candidates.length) { box.innerHTML = ''; return; }
+    box.innerHTML = candidates.map(function (c) {
+      var src = c.file ? ('/api/file?id=' + encodeURIComponent(jobId) + '&n=' + c.file) : '';
+      return '<div class="cand' + (c.chosen ? ' on' : '') + '">' +
+        (src ? '<img src="' + src + '" alt="候选 ' + c.rank + '" loading="lazy" />' : '') +
+        '<div class="meta">' +
+        '<b>#' + c.rank + '</b>' + (c.chosen ? ' <span class="pick">已采用</span>' : '') +
+        '<br>综合分 ' + c.score +
+        '<br>对接边长差 ' + c.len_diff_pct + '%' +
+        '<br>凸包空隙 ' + c.hull_gap_pct + '%' +
+        '<br>矩形贴合 ' + c.rect_fill_pct + '% · 轮廓 ' + c.outline_vertices + ' 点' +
+        '</div></div>';
     }).join('');
   }
 

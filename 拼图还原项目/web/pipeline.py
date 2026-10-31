@@ -391,52 +391,126 @@ def _joint_length_diff(joints: list, lengths: dict) -> float:
     return round(float(np.mean(diffs)), 2) if diffs else 999.0
 
 
+def solution_metrics(entry: dict, names: dict, starts: dict, share: float = 0.9) -> dict | None:
+    """给一个候选解打分：对接边长差 / 凸包空隙 / 空洞 / 重叠 / 矩形贴合度 / 轮廓复杂度。
+
+    抄自 foweh 分支 371df5e。
+    """
+    placed = entry.get("placed") or []
+    polys = entry.get("polys") or []
+    if not placed or len(placed) != len(polys):
+        return None
+    labeled = [(names.get(int(item[0]), str(item[0])),
+                np.asarray(polys[k], dtype=np.float64),
+                starts.get(int(item[0]))) for k, item in enumerate(placed)]
+
+    joints = find_joints(labeled, share=share)
+    joined = set()
+    for j in joints:
+        joined.add(j["a"].rstrip("0123456789"))
+        joined.add(j["b"].rstrip("0123456789"))
+    if len(joined) < len(names):          # 有碎片没接上，不算完整拼法
+        return None
+
+    lengths = {}
+    for name, poly, st in labeled:
+        for no, a, b in edges_of(poly, st):
+            lengths[f"{name}{no}"] = float(np.linalg.norm(np.asarray(b) - np.asarray(a)))
+    diff = _joint_length_diff(joints, lengths)
+
+    arrs = [np.asarray(p, dtype=float) for p in polys]
+    info = {"len_diff_pct": diff, "joint_pairs": len(joints)}
+    try:
+        from shapely.geometry import Polygon as _SPoly
+        from shapely.ops import unary_union as _union
+        import cv2 as _cv2
+        ps = [_SPoly(p).buffer(0) for p in arrs]
+        u = _union(ps)
+        total = sum(p.area for p in ps)
+        holes = sum(abs(_SPoly(r).area) for r in getattr(u, "interiors", [])) / total * 100
+        overlap = (total - u.area) / total * 100
+        hull = abs(float(_cv2.contourArea(_cv2.convexHull(
+            np.vstack(arrs).astype(np.float32)))))
+        hull_gap = max(0.0, hull - total) / total * 100
+        rect = u.minimum_rotated_rectangle
+        rect_fill = u.area / rect.area * 100 if rect.area > 0 else 0.0
+        outline_v = sum(len(g.exterior.coords) - 1
+                        for g in (getattr(u, "geoms", None) or [u])
+                        if hasattr(g, "exterior"))
+        info.update({
+            "hull_gap_pct": round(hull_gap, 2),
+            "holes_pct": round(holes, 3),
+            "overlap_pct": round(overlap, 3),
+            "rect_fill_pct": round(rect_fill, 1),
+            "outline_vertices": outline_v,
+        })
+    except Exception:
+        info.setdefault("hull_gap_pct", 0.0)
+
+    # 综合分：越小越"合理"。矩形先验是软约束 —— 只有几乎贴满矩形(≥97%)才大幅加分，
+    # 这样非矩形原图不会被硬拽成矩形，但真有矩形解时它会脱颖而出。
+    rect_fill = info.get("rect_fill_pct")
+    rect_pen = 0.0 if rect_fill is None or rect_fill >= 97 else 6.0 + 0.08 * (97 - rect_fill)
+    score = (info["len_diff_pct"]
+             + 2.0 * info.get("hull_gap_pct", 0.0)
+             + 3.0 * max(0.0, info.get("holes_pct", 0.0))
+             + 3.0 * max(0.0, info.get("overlap_pct", 0.0))
+             + rect_pen
+             + 0.2 * max(0, info.get("outline_vertices", 4) - 4))
+    info["rect_penalty"] = round(rect_pen, 2)
+    info["score"] = round(float(score), 2)
+    return info
+
+
 def rerank_solutions(sol_json: Path, names: dict, starts: dict,
-                     share: float = 0.9) -> dict | None:
-    """在 beam 给出的候选里挑「边接得最吻合」的那个。
+                     share: float = 0.9, top_k: int = 5) -> dict | None:
+    """在 beam 给出的候选里，按「拼法的合理性」排序，返回最优 + 前 top_k 名。
 
-    eval_union.py 只按空洞/重叠排序，而错误的拼法同样是 0 空洞 0 重叠
-    （碎片错边相接一样能拼满），所以必须再按**对接边长度一致度**重排。
-
-    返回 {"entry": 候选解, "joints": [...], "diff": 平均长度差%, "index": i}
+    只看空洞/重叠不够 —— 错边相接同样是 0 空洞 0 重叠。这里综合：
+    对接边长度差、凸包空隙、空洞/重叠、矩形贴合度、轮廓顶点数。
+    （抄自 foweh 分支 371df5e）
     """
     try:
         doc = json.loads(Path(sol_json).read_text(encoding="utf-8"))
         sols = doc.get("solutions") or []
     except Exception:
         return None
-    best = None
+
+    ranked = []
     for idx, entry in enumerate(sols):
-        placed = entry.get("placed") or []
-        polys = entry.get("polys") or []
-        if not placed or len(placed) != len(polys):
+        info = solution_metrics(entry, names, starts, share=share)
+        if info is None:
             continue
-        labeled = [(names.get(int(item[0]), str(item[0])),
-                    np.asarray(polys[k], dtype=np.float64),
-                    starts.get(int(item[0]))) for k, item in enumerate(placed)]
-        joints = find_joints(labeled, share=share)
-        pieces = set()
-        for j in joints:
-            pieces.add(j["a"].rstrip("0123456789"))
-            pieces.add(j["b"].rstrip("0123456789"))
-        if len(pieces) < len(names):        # 有碎片没接上，直接淘汰
+        ranked.append({"index": idx, "entry": entry, "metrics": info,
+                       "score": info["score"]})
+    if not ranked:
+        return None
+    ranked.sort(key=lambda r: (r["score"], r["index"]))
+
+    # 去重：不同的"放置顺序"可能得到完全一样的拼法（顶点对称），合并掉
+    uniq, seen = [], set()
+    for r in ranked:
+        m = r["metrics"]
+        sig = (round(m.get("len_diff_pct", 0), 1),
+               round(m.get("hull_gap_pct", 0), 1),
+               round(m.get("rect_fill_pct", 0), 0),
+               m.get("outline_vertices"))
+        if sig in seen:
             continue
-        lengths = {}
-        for k, item in enumerate(placed):
-            pid = int(item[0])
-            poly = poly_by_id_edges = np.asarray(polys[k], dtype=np.float64)
-            for no, a, b in edges_of(poly, starts.get(pid)):
-                lengths[f"{names.get(pid, str(pid))}{no}"] = float(
-                    np.linalg.norm(np.asarray(b) - np.asarray(a)))
-        diff = _joint_length_diff(joints, lengths)
-        cand = {"entry": entry, "joints": joints, "diff": diff,
-                "index": idx, "pairs": len(joints)}
-        # 关键：长度一致度优先，其次贴合对数多的
-        key = (diff, -len(joints))
-        if best is None or key < best["_key"]:
-            cand["_key"] = key
-            best = cand
-    return best
+        seen.add(sig)
+        uniq.append(r)
+    ranked = uniq
+
+    best = ranked[0]
+    return {
+        "entry": best["entry"],
+        "index": best["index"],
+        "diff": best["metrics"]["len_diff_pct"],
+        "pairs": best["metrics"]["joint_pairs"],
+        "score": best["score"],
+        "metrics": best["metrics"],
+        "top": ranked[:top_k],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -1006,6 +1080,7 @@ def solve(
             "chosen": f"beam#{pick['index']}",
             "mean_len_diff_pct": pick["diff"],
             "joint_pairs": pick["pairs"],
+            "score": pick.get("score"),
             "budget_s": beam_runs[-1]["budget"] if beam_runs else None,
             "attempts": len(beam_runs),
         })
@@ -1035,13 +1110,13 @@ def solve(
 
     rendered = False
     info: dict = {}
+    # 贴图源优先级：绿幕抠图后的 keyed.jpg（已 despill）> 01_despill.jpg > 原图
+    render_src = keyed_img if keyed_img.exists() else (
+        out / "01_despill.jpg" if (out / "01_despill.jpg").exists() else image_path)
+    # 蒙版优先级：key_alpha.png（亚像素软边）> 01_alpha.png
+    render_alpha = alpha_png if alpha_png.exists() else out / "01_alpha.png"
     if solution:
         try:
-            # 贴图源优先级：绿幕抠图后的 keyed.jpg（已 despill）> 01_despill.jpg > 原图
-            render_src = keyed_img if keyed_img.exists() else (
-                out / "01_despill.jpg" if (out / "01_despill.jpg").exists() else image_path)
-            # 蒙版优先级：key_alpha.png（亚像素软边）> 01_alpha.png
-            render_alpha = alpha_png if alpha_png.exists() else out / "01_alpha.png"
             rendered = render_assembled(render_src, scaled_json, best_union, assembled,
                                         names=names, labels_out=assembled_labels,
                                         edge_starts=starts, info=info,
@@ -1057,6 +1132,45 @@ def solve(
         else:
             raise RuntimeError("渲染成品图失败")
 
+    # 6) 把「最可能的 N 种拼法」各画一张缩略图，供页面对比（抄自 foweh 分支 371df5e）
+    #    束搜索路径渲染前 top_k；双射路径则把这一种解也当成候选，保证页面上永远有内容。
+    candidates: list = []
+    cand_pool: list = []
+    if pick:
+        cand_pool = [{"entry": it["entry"], "index": it["index"],
+                      "score": it["score"], "metrics": it["metrics"]}
+                     for it in pick["top"]]
+    elif solution:
+        m = solution_metrics(solution, names, starts)
+        if m is not None:
+            cand_pool = [{"entry": solution, "index": -1, "score": m["score"], "metrics": m}]
+    for rank_i, item in enumerate(cand_pool, start=1):
+        name = f"cand_{rank_i}.jpg"
+        try:
+            render_assembled(
+                render_src, scaled_json, best_union, out / name,
+                solution={"placed": item["entry"].get("placed"),
+                          "polys": item["entry"].get("polys")},
+                fg_mask_path=out / "01_mask.png",
+                fg_alpha_path=render_alpha,
+                max_side=520, margin=10,
+            )
+        except Exception:
+            name = None
+        m = item["metrics"]
+        candidates.append({
+            "rank": rank_i,
+            "index": item["index"],
+            "chosen": rank_i == 1,
+            "file": name,
+            "score": item["score"],
+            "len_diff_pct": m.get("len_diff_pct"),
+            "hull_gap_pct": m.get("hull_gap_pct"),
+            "rect_fill_pct": m.get("rect_fill_pct"),
+            "outline_vertices": m.get("outline_vertices"),
+            "joint_pairs": m.get("joint_pairs"),
+        })
+
     steps["total"] = round(time.time() - t_start, 2)
     result = {
         "pieces": n_pieces,
@@ -1068,6 +1182,7 @@ def solve(
         "ranking": ranking,
         "clean": clean,
         "keying": key_info,
+        "candidates": candidates,
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }

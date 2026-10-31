@@ -60,6 +60,7 @@ for _n, _t in PREVIEW_FILES:
     ALLOWED_FILES.add(_n)
 ALLOWED_FILES.update({"01_alpha.png", "01_mask_raw.png", "01_despill.jpg",
                      "key_alpha.png", "keyed.jpg"})
+ALLOWED_FILES.update({f"cand_{i}.jpg" for i in range(1, 6)})
 
 
 # --------------------------------------------------------------------------
