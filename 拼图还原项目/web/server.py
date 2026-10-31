@@ -41,6 +41,7 @@ ALLOWED_FILES = {
     "best_union.json", "pieces.json", "pieces_scaled.json", "result.json",
     "chosen_solution.json",
     "cand_1.jpg", "cand_2.jpg", "cand_3.jpg", "cand_4.jpg", "cand_5.jpg",
+    "cand_6.jpg", "cand_7.jpg", "cand_8.jpg",
     "run.log", "segment.log", "rescale_pieces.log", "beam_search.log",
     "eval_union.log", "error.log",
 }

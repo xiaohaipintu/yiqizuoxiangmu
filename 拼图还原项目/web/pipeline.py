@@ -483,16 +483,22 @@ def solution_metrics(entry: dict, names: dict, starts: dict, share: float = 0.9)
 
 
 def rerank_solutions(sol_json: Path, names: dict, starts: dict,
-                     share: float = 0.9, top_k: int = 5) -> dict | None:
+                     share: float = 0.9, top_k: int = 5,
+                     extra_sols: list | None = None) -> dict | None:
     """在 beam 给出的候选里，按「拼法的合理性」排序，返回最优 + 前 top_k 名。
 
     只看空洞/重叠不够 —— 错边相接同样是 0 空洞 0 重叠。这里综合：
     对接边长度差、凸包空隙、空洞/重叠、矩形贴合度、轮廓顶点数。
+    extra_sols 用来并入 T 型接缝搜索（split_search）的候选。
     """
     try:
         doc = json.loads(Path(sol_json).read_text(encoding="utf-8"))
-        sols = doc.get("solutions") or []
+        sols = list(doc.get("solutions") or [])
     except Exception:
+        sols = []
+    if extra_sols:
+        sols.extend(extra_sols)
+    if not sols:
         return None
 
     ranked = []
@@ -888,6 +894,25 @@ def solve(
     if not n_sol:
         raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
 
+    # 3.5) T 型接缝补充搜索：beam 表达不了「短边顶在长边中间」（一条边被两块共用），
+    #      而那正是矩形切法的常见形状，不补这一步永远看不到 A2↔B4 这种相邻关系
+    split_sols: list = []
+    try:
+        import split_search
+        from assemble import Piece as _Piece      # split_search 内部也这么建
+        sdata = json.loads(scaled_json.read_text(encoding="utf-8"))
+        spieces = {int(d["id"]): _Piece(d) for d in sdata["pieces"]}
+        found = split_search.search(spieces, time.time() + 12, cov=0.30)
+        split_sols = [{"gap_pct": g, "placed": pl, "polys": [p.tolist() for p in ps]}
+                      for g, pl, ps in found[:300]]
+        (out / "split_solutions.json").write_text(
+            json.dumps({"n": len(found), "solutions": split_sols}, ensure_ascii=False),
+            encoding="utf-8")
+        step("split", f"T型接缝补充 {len(found)} 个候选")
+    except Exception as exc:
+        step("split", f"T型接缝搜索跳过：{exc}")
+
+    pick = rerank_solutions(sol_json, names, starts, extra_sols=split_sols)
     # 4) 并集评估
     step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
     _run("eval_union.py",
@@ -988,6 +1013,64 @@ def solve(
                 "outline_vertices": m.get("outline_vertices"),
                 "joint_pairs": m.get("joint_pairs"),
             })
+
+    # 6.5) 单独列出「含 T 型接缝」的候选：短边顶在长边中间这种拼法综合分天然偏低
+    #      （空隙大、长度差大），排不进前 5，但用户可能就是想看这种
+    t_joint_rows = []
+    for idx, entry in enumerate(split_sols):
+        info = solution_metrics(entry, names, starts, share=0.25)
+        if info is None:
+            continue
+        ids = [int(x[0]) for x in (entry.get("placed") or [])]
+        labeled = [(names.get(pid, str(pid)), np.asarray(poly, float), starts.get(pid))
+                   for pid, poly in zip(ids, entry.get("polys") or [])]
+        # T 型接缝两种形态都要抓：
+        #   a) 短边只贴住长边的一段（share < 90%）
+        #   b) 短边整条嵌在长边里（share ≈ 100%，但两条边长度比 < 0.85）
+        lens = {}
+        for nm, poly_, st_ in labeled:
+            for no_, a_, b_ in edges_of(poly_, st_):
+                lens[f"{nm}{no_}"] = float(np.linalg.norm(np.asarray(b_) - np.asarray(a_)))
+        partial = []
+        for j in find_joints(labeled, share=0.25):
+            la, lb = lens.get(j["a"], 0.0), lens.get(j["b"], 0.0)
+            ratio = (min(la, lb) / max(la, lb)) if max(la, lb) > 0 else 1.0
+            if j["share"] < 90 or ratio < 0.85:
+                partial.append(j)
+        if not partial:
+            continue
+        t_joint_rows.append({"entry": entry, "metrics": info, "score": info["score"],
+                             "t": partial})    
+    t_joint_rows.sort(key=lambda r: r["score"])
+    base_rank = len(candidates)
+    for k, row in enumerate(t_joint_rows[:3], start=1):
+        name = f"cand_{base_rank + k}.jpg"
+        try:
+            render_assembled(
+                keyed_img if keyed_img.exists() else image_path,
+                scaled_json, best_union, out / name,
+                solution={"placed": row["entry"].get("placed"),
+                          "polys": row["entry"].get("polys")},
+                fg_mask_path=alpha_png if alpha_png.exists() else out / "01_mask.png",
+                max_side=520, margin=10,
+            )
+        except Exception:
+            name = None
+        m = row["metrics"]
+        candidates.append({
+            "rank": base_rank + k,
+            "index": -1,
+            "chosen": False,
+            "t_joint": True,
+            "joins": [(j["a"], j["b"], j["share"]) for j in row["t"]][:3],
+            "file": name,
+            "score": row["score"],
+            "len_diff_pct": m.get("len_diff_pct"),
+            "hull_gap_pct": m.get("hull_gap_pct"),
+            "rect_fill_pct": m.get("rect_fill_pct"),
+            "outline_vertices": m.get("outline_vertices"),
+            "joint_pairs": m.get("joint_pairs"),
+        })
 
     steps["total"] = round(time.time() - t_start, 2)
     result = {

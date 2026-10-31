@@ -623,10 +623,16 @@
         (src ? '<img src="' + src + '" alt="候选 ' + c.rank + '" loading="lazy" />' : '') +
         '<div class="meta">' +
         '<b>#' + c.rank + '</b>' + (c.chosen ? ' <span class="pick">已采用</span>' : '') +
+        (c.t_joint ? ' <span style="color:#a855f7;font-weight:600;">T型接缝</span>' : '') +
         '<br>综合分 ' + c.score +
         '<br>对接边长差 ' + c.len_diff_pct + '%' +
         '<br>凸包空隙 ' + c.hull_gap_pct + '%' +
         '<br>矩形贴合 ' + c.rect_fill_pct + '% · 轮廓 ' + c.outline_vertices + ' 点' +
+        (c.joins && c.joins.length
+          ? '<br>' + c.joins.map(function (j) {
+              return j[0] + '↔' + j[1] + ' ' + Math.round(j[2]) + '%';
+            }).join('、')
+          : '') +
         '</div></div>';
     }).join('');
   }
