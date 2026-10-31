@@ -1,0 +1,8 @@
+140: def polygon_of_component(comp_mask: np.ndarray, pixel_area: float) -> tuple[np.ndarray, list[dict]] | None:
+167: def main() -> int:
+169: ap.add_argument("--image", default="input/pieces.jpg")
+170: ap.add_argument("--out", default="out")
+171: ap.add_argument("--min-area", type=float, default=1500.0)
+172: ap.add_argument("--mode", choices=("auto", "red"), default="auto")
+173: ap.add_argument("--delta-e", type=float, default=40.0)
+196: res = polygon_of_component(comp, area)

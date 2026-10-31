@@ -1,0 +1,4 @@
+
+C:\Users\Administrator\chats\2026-10-31\new-chat\src\equal_edges.py:99:    ap.add_argument("--no-closure", action="store_true")
+C:\Users\Administrator\chats\2026-10-31\new-chat\src\equal_edges.py:121:    if len(pieces) >= 3 and not args.no_closure:
+

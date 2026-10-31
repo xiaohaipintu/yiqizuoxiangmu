@@ -1,0 +1,5 @@
+36: def __init__(self, pieces, tol=0.025, cov=0.92, overlap_tol=0.004,
+40: self.cov = cov
+76: if shared < self.cov * min(La, Lq):
+134: ap.add_argument("--cov", type=float, default=0.92)
+141: s = Search(pieces, tol=args.tol, cov=args.cov, max_nodes=args.max_nodes, time_budget=args.time)

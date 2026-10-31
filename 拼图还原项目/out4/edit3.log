@@ -1,0 +1,5 @@
+
+C:\Users\Administrator\chats\2026-10-31\new-chat\src\eval_union.py:45:        m["gap_pct"] = hull_gap(sol["polys"])
+C:\Users\Administrator\chats\2026-10-31\new-chat\src\eval_union.py:46:        ranked.append((m["gap_pct"], m, sol))
+C:\Users\Administrator\chats\2026-10-31\new-chat\src\eval_union.py:61:        cv2.putText(cv, f"outer slivers {m[chr(39)+chr(103)+chr(97)+chr(112)+chr(95)+chr(112)+chr(99)+chr(116)+chr(39)]:.2f}%  overlap {m[chr(39)+chr(111)+chr(118)+chr(101)+chr(114)+chr(108)+chr(97)+chr(112)+chr(95)+chr(112)+chr(99)+chr(116)+chr(39)]:.2f}%",
+

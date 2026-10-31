@@ -1,0 +1,8 @@
+等长边配对成功 3 种（容差 5%，不镜像）
+  #1e1(1334px)  x  #2e3(1340px)   Δ0.5%
+  #2e0(1979px)  x  #3e1(1962px)   Δ0.8%
+  #1e0(1167px)  x  #3e0(1133px)   Δ3.0%
+三块（或全部）用整条等长边接上的组合：682 种
+  最佳闭环：空穴率 0.35%  外轮廓 7283px  4 顶点
+写出 C:\Users\Administrator\chats\2026-10-31\new-chat\out2\31_closed.png 832x1100
+写出 C:\Users\Administrator\chats\2026-10-31\new-chat\out2\30_equal_edges.png 968x1304

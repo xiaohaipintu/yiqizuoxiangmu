@@ -1,0 +1,16 @@
+def polygon_area(poly: np.ndarray) -> float:
+def signed_area(poly: np.ndarray) -> float:
+def ensure_ccw(poly: np.ndarray) -> np.ndarray:
+def centroid(poly: np.ndarray) -> np.ndarray:
+def perimeter(poly: np.ndarray) -> float:
+def edges(poly: np.ndarray) -> List[dict]:
+def interior_angles(poly: np.ndarray) -> List[float]:
+def drop_collinear(poly: np.ndarray, tol_deg: float = 8.0, px_dev: float = 0.0) -> np.ndarray:
+def rotation(deg: float) -> np.ndarray:
+def transform_poly(poly: np.ndarray, R: np.ndarray, t: np.ndarray, mirror: bool = False) -> np.ndarray:
+def bbox(poly: np.ndarray) -> Tuple[float, float, float, float]:
+def to_pos(poly: np.ndarray) -> np.ndarray:
+def clip_halfplane(poly: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def convex_overlap_area(pa: np.ndarray, pb: np.ndarray) -> float:
+def hull_area(pts: np.ndarray) -> float:
+def poly_overlap_area(a, b) -> float:

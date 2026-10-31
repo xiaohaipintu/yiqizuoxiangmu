@@ -1,0 +1,25 @@
+凹形碎片：#1（面积占凸包 87.7%）
+
+各块比例指纹（边长 / 该块周长，尺度无关）:
+  #1: 周长  5787.5px  714.4(12.3%)  304.3( 5.3%)  266.7( 4.6%)  830.0(14.3%)  260.6( 4.5%)  305.8( 5.3%)  390.1( 6.7%)  1094.0(18.9%)  388.3( 6.7%)  369.2( 6.4%)  864.0(14.9%)
+  #2: 周长  1001.9px  335.8(33.5%)   36.4( 3.6%)  220.0(22.0%)  128.2(12.8%)  281.4(28.1%)
+  #3: 周长  1746.6px  561.0(32.1%)  207.5(11.9%)  296.7(17.0%)  681.3(39.0%)
+  #4: 周长  1329.8px  390.4(29.4%)  354.9(26.7%)   78.5( 5.9%)  505.9(38.0%)
+Traceback (most recent call last):
+  File "C:\Users\Administrator\chats\2026-10-31\new-chat\src\ratio_match.py", line 223, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "C:\Users\Administrator\chats\2026-10-31\new-chat\src\ratio_match.py", line 162, in main
+    s, R, t = similarity_fit(src, dst)
+              ~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\Administrator\chats\2026-10-31\new-chat\src\ratio_match.py", line 43, in similarity_fit
+    s = float(np.trace(D) / var_s) if var_s > 0 else 1.0
+              ~~~~~~~~^^^
+  File "C:\Users\Administrator\AppData\Local\Doubao\User Data\sandbox_runtime\bases\772984f6fd3a8ae0ae7d2422cd7c2bfa\python\Lib\site-packages\numpy\_core\fromnumeric.py", line 1908, in trace
+    return asanyarray(a).trace(
+           ~~~~~~~~~~~~~~~~~~~^
+        offset=offset, axis1=axis1, axis2=axis2, dtype=dtype, out=out
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+ValueError: diag requires an array of at least two dimensions

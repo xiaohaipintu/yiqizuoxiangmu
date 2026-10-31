@@ -1,0 +1,21 @@
+        p["edges"] = G.edges(np.array(p["polygon"]))
+        p["interior_angles"] = G.interior_angles(np.array(p["polygon"]))
+        p["bbox"] = G.bbox(np.array(p["polygon"]))
+
+    # 调试渲染
+    vis = bgr.copy()
+    palette = [
+        for e in p["edges"]:
+            m = (int(e["mid"][0]), int(e["mid"][1]))
+            cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
+            cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    cv2.imwrite(str(outdir / "02_pieces.png"), vis)
+
+    with open(outdir / "pieces.json", "w", encoding="utf-8") as f:
+        lens = " ".join(f"{e['index']}:{e['length']:.0f}" for e in p["edges"])
+        angs = " ".join(f"{a:.0f}" for a in p["interior_angles"])
+        dev = (p["area"] - p["pixel_area"]) / p["pixel_area"] * 100
+        print(f"{p['id']:>3} {len(p['polygon']):>4} {p['area']:>9.0f} {dev:>7.1f}% {p['perimeter']:>7.0f} {lens:<38} {angs}")
+    total = sum(p["area"] for p in pieces)
+    print(f"碎片总面积 {total:.0f} px², 外接方形边长约 {total ** 0.5:.1f} px")
+    return 0

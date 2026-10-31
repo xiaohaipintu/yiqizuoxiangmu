@@ -1,0 +1,5 @@
+#1+#2: 边 1e1(1334px) ↔ 2e2(1480px)  长度差 11.0%  贴合段 1334px
+#1+#3: 边 1e0(1167px) ↔ 3e0(1133px)  长度差 3.0%  贴合段 1133px
+#2+#3: 边 2e3(1600px) ↔ 3e2(1687px)  长度差 5.5%  贴合段 1600px
+写出 C:\Users\Administrator\chats\2026-10-31\new-chat\out2\20_pairs.png 1130x432
+写出 C:\Users\Administrator\chats\2026-10-31\new-chat\out2\21_best_pair.png 627x1000
