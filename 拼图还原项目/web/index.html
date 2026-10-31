@@ -390,7 +390,7 @@
       var url = URL.createObjectURL(file);
       var img = new Image();
       img.onload = function () {
-        var max = 2000;
+        var max = 3000;      // 抠图精度吃分辨率，别压太狠
         var w = img.naturalWidth, h = img.naturalHeight;
         var scale = Math.min(1, max / Math.max(w, h));
         var cv = document.createElement('canvas');

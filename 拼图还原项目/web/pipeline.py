@@ -276,22 +276,47 @@ def _interior_angle(a, b, c) -> float:
     return math.degrees(math.acos(float(np.clip(v1 @ v2 / (n1 * n2), -1.0, 1.0))))
 
 
-def simplify_polygon(poly, tol: float = CLEAN_ANGLE_TOL) -> np.ndarray:
-    """去掉「几乎是直线」的顶点（影子、毛刺、抗锯齿造成的假角）。"""
+def simplify_polygon(poly, tol: float = CLEAN_ANGLE_TOL,
+                     min_edge_frac: float = 0.02) -> np.ndarray:
+    """去掉「几乎是直线」的顶点（影子、毛刺、抗锯齿造成的假角），再剔除碎边。
+
+    两件事分开做：
+    1. **共线合并**：内角与 180° 差 < tol 的顶点删掉（影子把直边切两段时会这样）；
+    2. **碎边剔除**：比周长 min_edge_frac 还短的边（亚像素拟合留下的毛刺尖刺）合并掉。
+    """
     pts = [np.asarray(p, dtype=np.float64) for p in poly]
+    # 1) 共线合并
     for _ in range(8):
         n = len(pts)
         if n <= 3:
             break
-        keep = []
-        for k in range(n):
-            ang = _interior_angle(pts[k - 1], pts[k], pts[(k + 1) % n])
-            keep.append(abs(180.0 - ang) >= tol)
+        keep = [abs(180.0 - _interior_angle(pts[k - 1], pts[k], pts[(k + 1) % n])) >= tol
+                for k in range(n)]
         if all(keep):
             break
         pts = [p for p, kp in zip(pts, keep) if kp]
         if not pts:
             break
+    # 2) 碎边剔除（至少保留 3 个顶点）
+    for _ in range(8):
+        n = len(pts)
+        if n <= 3:
+            break
+        per = float(sum(np.linalg.norm(pts[(k + 1) % n] - pts[k]) for k in range(n)))
+        cut = per * min_edge_frac
+        drop = set()
+        for k in range(n):
+            if k in drop:
+                continue
+            nxt = (k + 1) % n
+            if np.linalg.norm(pts[nxt] - pts[k]) < cut:
+                drop.add(nxt if np.linalg.norm(pts[nxt] - pts[k]) < cut else k)
+        if not drop:
+            break
+        keep_idx = [k for k in range(n) if k not in drop]
+        if len(keep_idx) < 3:
+            break
+        pts = [pts[k] for k in keep_idx]
     return np.asarray(pts, dtype=np.float64)
 
 
@@ -745,7 +770,7 @@ def solve(
     # 0) 归一化输入：转存一份到输出目录（cv2 在 Windows 下读不了中文路径），并限制尺寸
     src_img = read_image(image_path)
     h, w = src_img.shape[:2]
-    max_side = 2400
+    max_side = 3200
     if max(h, w) > max_side:
         ratio = max_side / float(max(h, w))
         src_img = cv2.resize(src_img, (int(w * ratio), int(h * ratio)),

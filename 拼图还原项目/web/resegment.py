@@ -139,6 +139,12 @@ def _intersect(l1, l2):
 
 
 def refine_contour(alpha: np.ndarray, cnt: np.ndarray, eps_ratio: float = 0.008) -> np.ndarray:
+    """粗轮廓 → 逐边亚像素拟合 → 相邻直线求交，得到精确多边形。
+
+    eps_ratio 保持 0.008：试过 0.004（顶点数更贴近真值 5/6/4），但亚像素噪声会冒出
+    6~27px 的毛刺尖刺，拼合反而变差（对接边长差 0.93% → 1.76%，碎片之间甚至不相接）。
+    宁可略粗、互相抵消，也不要毛刺。
+    """
     peri = cv2.arcLength(cnt, True)
     approx = cv2.approxPolyDP(cnt, eps_ratio * peri, True).reshape(-1, 2).astype(np.float64)
     if len(approx) < 3:
