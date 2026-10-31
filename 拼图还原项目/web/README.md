@@ -153,7 +153,18 @@ A1 ↔ C4  贴合 100%      A10 ↔ B1  贴合 100%      C1 ↔ D4  贴合 100%
 
 服务器：腾讯云上海 `wildyouth-api`（Tailscale `100.67.40.70`），系统 Ubuntu 20.04 / Python 3.8。
 
-**访问地址：<http://100.67.40.70:8099/>**（Tailscale 内网，公网不开放）
+**访问地址（三级入口，同一个服务）：**
+
+| 入口 | 地址 | 说明 |
+| --- | --- | --- |
+| **wildyouth 子页**（推荐） | **<https://wildyouth.cn/jigsaw/>** | nginx 反代，手机/电脑都能开，走 443 |
+| Tailscale 直连 | <http://100.67.40.70:8099/> | 内网调试用，公网不可达 |
+| 服务器本机 | <http://127.0.0.1:8099/> | 排查 502 时用 |
+
+子页由 `nginx` 反代实现，配置在 `/etc/nginx/snippets/jigsaw.conf`（仓库里同名文件
+`web/nginx-jigsaw.conf`），在 `sites-available/wild-youth` 的 HTTPS server 块里 include 一行。
+前端所有接口都写成**相对路径**（`api/solve`、`api/job` …），所以挂在 `/jigsaw/` 子路径下也能用。
+回滚：`sudo cp /etc/nginx/sites-available/wild-youth.bak-prejigsaw /etc/nginx/sites-available/wild-youth && sudo nginx -t && sudo systemctl reload nginx`。
 
 | 项 | 值 |
 | --- | --- |

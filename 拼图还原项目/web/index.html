@@ -459,7 +459,7 @@
     var it = null;
     items.forEach(function (x) { if (x.n === livePinned) it = x; });
     if (!it) it = items[items.length - 1];
-    var src = '/api/file?id=' + encodeURIComponent(jobId) + '&n=' + encodeURIComponent(it.n)
+    var src = 'api/file?id=' + encodeURIComponent(jobId) + '&n=' + encodeURIComponent(it.n)
             + '&t=' + it.mtime + '-' + it.size;
     var img = $('live-img');
     if (img.getAttribute('src') !== src) {
@@ -476,7 +476,7 @@
   }
 
   function refreshLive(jobId) {
-    fetch('/api/preview?id=' + encodeURIComponent(jobId))
+    fetch('api/preview?id=' + encodeURIComponent(jobId))
       .then(function (r) { return r.json(); })
       .then(function (p) { paintLive(p.items || [], jobId); })
       .catch(function () { /* 预览失败不影响主流程 */ });
@@ -500,7 +500,7 @@
     var id = currentJobId;
     stopTimers();
     if (id) {
-      fetch('/api/cancel?id=' + encodeURIComponent(id), { method: 'POST', keepalive: true })
+      fetch('api/cancel?id=' + encodeURIComponent(id), { method: 'POST', keepalive: true })
         .catch(function () { /* 网络断了也无所谓，前端已经退出等待 */ });
     }
     reset();
@@ -524,7 +524,7 @@
     items.forEach(function (x) { if (x.n === livePinned) it = x; });
     if (!it) it = items[items.length - 1];
 
-    var src = '/api/file?id=' + encodeURIComponent(jobId) +
+    var src = 'api/file?id=' + encodeURIComponent(jobId) +
               '&n=' + encodeURIComponent(it.n) +
               '&t=' + it.mtime + '-' + it.size;     // 时间戳破缓存
     var img = $('live-img');
@@ -543,7 +543,7 @@
 
   function refreshLive(jobId) {
     liveJobId = jobId;
-    fetch('/api/preview?id=' + encodeURIComponent(jobId))
+    fetch('api/preview?id=' + encodeURIComponent(jobId))
       .then(function (r) { return r.json(); })
       .then(function (p) { paintLive(p.items || [], jobId); })
       .catch(function () { /* 预览失败不影响主流程 */ });
@@ -570,7 +570,7 @@
     $('live-img').removeAttribute('src');
     timer = setInterval(tickTimer, 500);
 
-    fetch('/api/solve', {
+    fetch('api/solve', {
       method: 'POST',
       headers: {
         'Content-Type': 'image/jpeg',
@@ -594,7 +594,7 @@
   function poll(jobId, timer) {
     var lastStatus = '';
     polling = setInterval(function () {
-      fetch('/api/job?id=' + encodeURIComponent(jobId))
+      fetch('api/job?id=' + encodeURIComponent(jobId))
         .then(function (r) { return r.json(); })
         .then(function (job) {
           if (job.error && job.status !== 'error') throw new Error(job.error);
@@ -632,7 +632,7 @@
 
   function showResult(jobId, result) {
     current = { jobId: jobId, result: result };
-    var base = '/api/file?id=' + encodeURIComponent(jobId) + '&n=';
+    var base = 'api/file?id=' + encodeURIComponent(jobId) + '&n=';
     $('img-rank').src = base + '41_union_rank.png';
     $('img-mask').src = base + '01_mask.png';
     $('link-log').href = base + 'run.log';
@@ -659,7 +659,7 @@
   // ---------- 带名称的图 / 对照表 ----------
   function paintImages() {
     if (!current) return;
-    var base = '/api/file?id=' + encodeURIComponent(current.jobId) + '&n=';
+    var base = 'api/file?id=' + encodeURIComponent(current.jobId) + '&n=';
     var suf = showLabels ? '_labels' : '';
     $('img-upload').src = base + 'upload' + suf + '.jpg';
     $('img-assembled').src = base + 'assembled' + suf + '.jpg';
@@ -686,7 +686,7 @@
     var box = $('cand-grid');
     if (!candidates || !candidates.length) { box.innerHTML = ''; return; }
     box.innerHTML = candidates.map(function (c) {
-      var src = c.file ? ('/api/file?id=' + encodeURIComponent(jobId) + '&n=' + c.file) : '';
+      var src = c.file ? ('api/file?id=' + encodeURIComponent(jobId) + '&n=' + c.file) : '';
       return '<div class="cand' + (c.chosen ? ' on' : '') + '">' +
         (src ? '<img src="' + src + '" alt="候选 ' + c.rank + '" loading="lazy" />' : '') +
         '<div class="meta">' +
