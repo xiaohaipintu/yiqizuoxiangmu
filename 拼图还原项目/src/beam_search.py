@@ -11,6 +11,7 @@
     python src/beam_search.py --pieces out4/pieces.json --out out4 --beam 300 --cov 0.35
 输出:
     out4/beam_solutions.json
+    out4/beam_progress.png   搜索过程中每层刷新的「当前最优拼装」预览
 """
 from __future__ import annotations
 

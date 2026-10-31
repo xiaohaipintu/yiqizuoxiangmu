@@ -568,6 +568,107 @@ def _run(script: str, args: list, timeout: float, log, steps: dict | None = None
     return proc
 
 
+def _run_soft(script: str, args: list, timeout: float,
+              logs_dir: Path | None = None) -> subprocess.CompletedProcess | None:
+    """跑一个「可选」步骤：失败只记日志，不中断整条流水线。"""
+    cmd = [sys.executable, str(SRC_DIR / script)] + [str(a) for a in args]
+    started = time.time()
+    try:
+        proc = subprocess.run(cmd, cwd=str(PROJ_DIR), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout,
+                              env=child_env())
+    except Exception:
+        return None
+    try:
+        if logs_dir is not None:
+            write_step_log(logs_dir, script, cmd, proc, time.time() - started)
+    except Exception:
+        pass
+    return proc
+
+
+# --------------------------------------------------------------------------
+# 先验约束：1 个凹形 + 3 个三角形，每个三角形只能对应一个缺口（双射）
+# --------------------------------------------------------------------------
+def _reflex_count(poly) -> int:
+    n = len(poly)
+    sa = 0.0
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        sa += x1 * y2 - x2 * y1
+    sign = 1.0 if sa > 0 else -1.0
+    c = 0
+    for i in range(n):
+        o, a, b = poly[(i - 1) % n], poly[i], poly[(i + 1) % n]
+        cross = (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+        if cross * sign < 0:
+            c += 1
+    return c
+
+
+def notch_applicable(pieces_json: Path) -> tuple[bool, dict]:
+    """碎片集合是否满足「1 个凹形(3 凹顶点) + 恰好 3 个三角形」。"""
+    try:
+        doc = json.loads(Path(pieces_json).read_text(encoding="utf-8"))
+    except Exception:
+        return False, {}
+    pieces = doc.get("pieces") or []
+    concave = [(p, _reflex_count(p["polygon"])) for p in pieces]
+    concave = [(p, k) for p, k in concave if k > 0]
+    convex = [p for p in pieces if _reflex_count(p["polygon"]) == 0]
+    if len(concave) != 1:
+        return False, {}
+    cp, k = concave[0]
+    if k != 3 or len(convex) != 3:
+        return False, {}
+    return True, {"concave": cp, "triangles": convex}
+
+
+def notch_solution_from(out: Path, scaled_json: Path) -> tuple[dict | None, dict]:
+    """把双射匹配结果转成流水线通用的 {placed, polys} 解。"""
+    f = out / "notch_ratio_match.json"
+    if not f.exists():
+        return None, {}
+    try:
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        scaled = json.loads(Path(scaled_json).read_text(encoding="utf-8"))
+    except Exception:
+        return None, {}
+    by_label = {int(p["label"]): p for p in scaled.get("pieces", [])}
+    cp = by_label.get(int(doc.get("concave_piece", {}).get("label", -1)))
+    if cp is None:
+        return None, {}
+    polys = [[[float(x), float(y)] for x, y in cp["polygon"]]]
+    placed = [[int(cp["id"]), 0.0, 0.0, 0.0]]
+    for t in doc.get("triangles") or []:
+        p = by_label.get(int(t["label"]))
+        poly = t.get("placed_polygon") or t.get("placed")
+        if p is None or not poly:
+            return None, {}
+        polys.append([[*map(float, q)] for q in poly])
+        placed.append([int(p["id"]), 0.0, 0.0, 0.0])
+    return {"placed": placed, "polys": polys}, doc
+
+
+def notch_ok(doc: dict, max_overlap: float = 1.0, max_mean_err: float = 0.15) -> tuple[bool, str]:
+    """双射解能不能直接用：必须一一对应、贴得够准、没有明显穿透。"""
+    if not doc.get("bijection_ok"):
+        return False, "双射校验未通过"
+    ms = doc.get("matches") or []
+    if not ms:
+        return False, "没有匹配结果"
+    errs = [float(m.get("shape_err", 1.0)) for m in ms]
+    mean_err = sum(errs) / len(errs)
+    overlap = float((doc.get("coverage") or {}).get("overlap_pct", 100.0))
+    gap = float((doc.get("coverage") or {}).get("gap_pct", 100.0))
+    if overlap > max_overlap:
+        return False, f"重叠 {overlap:.2f}% > {max_overlap}%"
+    if mean_err > max_mean_err:
+        return False, f"平均形状误差 {mean_err:.3f} > {max_mean_err}"
+    return True, f"平均形状误差 {mean_err:.3f}，重叠 {overlap:.2f}%，缺口 {gap:.2f}%"
+
+
 # --------------------------------------------------------------------------
 # 成品图渲染：用真实像素 + 解出的刚体位姿把每块贴回原照片
 # --------------------------------------------------------------------------
@@ -584,6 +685,7 @@ def render_assembled(
     info: dict | None = None,
     solution: dict | None = None,
     fg_mask_path: str | Path | None = None,
+    fg_alpha_path: str | Path | None = None,
 ) -> bool:
     img = read_image(image_path)
     if solution is not None:
@@ -619,15 +721,22 @@ def render_assembled(
     # 前景掩膜：只贴真实碎片像素，避免把碎片边缘那一圈背景色也贴上去
     # （否则每块都自带一条绿色包边，拼缝看起来就像没拼上）
     fg = None
-    if fg_mask_path:
+    # 软边 alpha 优先（01_alpha.png 是 0~255 渐变），没有才退回二值 01_mask.png
+    for cand in (fg_alpha_path, fg_mask_path):
+        if not cand:
+            continue
         try:
-            fg = read_image(fg_mask_path)
-            if fg.ndim == 3:
-                fg = cv2.cvtColor(fg, cv2.COLOR_BGR2GRAY)
-            if fg.shape[:2] != (h_img, w_img):
-                fg = None
+            f = read_image(cand)
         except Exception:
-            fg = None
+            continue
+        if f is None:
+            continue
+        if f.ndim == 3:
+            f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+        if f.shape[:2] != (h_img, w_img):
+            continue
+        fg = f
+        break
     for k, item in enumerate(placed):
         if k >= len(polys):
             break
@@ -699,6 +808,27 @@ def render_assembled(
 
     if painted == 0:
         return False
+
+    # 软边合成后拼缝处会留下发丝级白缝（二值掩膜时代的膨胀补边被去掉了）。
+    # 这里把「不接触画布边缘的小白块」当作缝隙，用周围像素 inpaint 填平：
+    # 既保留软边（不再有背景色包边），又不会露出白线。
+    try:
+        white = ((canvas > 244).all(axis=2)).astype(np.uint8)
+        n_w, lab_w, st_w, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+        border_labels = set(lab_w[0, :]) | set(lab_w[-1, :]) \
+            | set(lab_w[:, 0]) | set(lab_w[:, -1])
+        holes = np.zeros((height, width), np.uint8)
+        for i in range(1, n_w):
+            if i in border_labels:
+                continue
+            if int(st_w[i, cv2.CC_STAT_AREA]) <= 400:
+                holes[lab_w == i] = 255
+        if holes.any():
+            canvas = cv2.inpaint(canvas, holes, 2, cv2.INPAINT_TELEA)
+            if info is not None:
+                info["seam_filled_px"] = int(np.count_nonzero(holes))
+    except Exception:
+        pass
 
     if max(width, height) > max_side:
         scale = max_side / float(max(width, height))
@@ -866,58 +996,85 @@ def solve(
          ["--pieces", pieces_json, "--out", scaled_json], timeout=120, log=step, steps=steps,
          logs_dir=logs)
 
-    # 3) 束搜索拼合 —— 时间预算自动决定，拼得不满意就自己加时重搜
-    total_edges = sum(len(p.get("edges") or []) for p in piece_list)
-    plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
+    # 3) 先验优先：1 个凹形 + 3 个三角形 → 每个三角形只能对应一个缺口（双射）。
+    #    满足且结果达标就直接采用，省掉几十秒束搜索；不满足/不达标再退回束搜索。
     sol_json = out / "beam_solutions.json"
     beam_runs: list[dict] = []
     pick = None
     n_sol = 0
-    for i, budget in enumerate(plan):
-        step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
-        _run("beam_search.py",
-             ["--pieces", scaled_json, "--out", out,
-              "--beam", "300", "--time", str(float(budget))],
-             timeout=budget + 240, log=step, steps=steps,
-             logs_dir=logs)
-        if not sol_json.exists():
-            raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
-        n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
+    notch_sol = None
+    notch_doc: dict = {}
+    applicable, _prior = notch_applicable(pieces_json)
+    if applicable:
+        step("notch", "1 凹形 + 3 三角形：按比例双射匹配 3 个缺口…")
+        _run_soft("notch_ratio_match.py",
+                  ["--pieces", scaled_json, "--out", out, "--match-mode", "shape"],
+                  timeout=180, logs_dir=logs)
+        notch_sol, notch_doc = notch_solution_from(out, scaled_json)
+        if notch_sol is None:
+            step("notch", "双射匹配没产出可用结果，退回束搜索")
+        else:
+            ok, why = notch_ok(notch_doc)
+            if ok:
+                n_sol = 1
+                step("notch", f"采用双射匹配（{why}）")
+            else:
+                step("notch", f"双射匹配不达标（{why}），退回束搜索")
+                notch_sol = None
+    else:
+        step("notch", "碎片构成不是「1 凹形 + 3 三角形」，跳过双射匹配")
+
+    # 4) 束搜索拼合 —— 双射已成功时跳过（时间预算自动决定，不满意自己加时重搜）
+    if notch_sol is None:
+        total_edges = sum(len(p.get("edges") or []) for p in piece_list)
+        plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
+        for i, budget in enumerate(plan):
+            step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
+            _run("beam_search.py",
+                 ["--pieces", scaled_json, "--out", out,
+                  "--beam", "300", "--time", str(float(budget))],
+                 timeout=budget + 240, log=step, steps=steps,
+                 logs_dir=logs)
+            if not sol_json.exists():
+                raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
+            n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
+            if not n_sol:
+                continue
+            pick = rerank_solutions(sol_json, names, starts)
+            beam_runs.append({"budget": budget, "solutions": n_sol,
+                              "len_diff": pick["diff"] if pick else None,
+                              "pairs": pick["pairs"] if pick else 0})
+            if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
+                break
         if not n_sol:
-            continue
-        pick = rerank_solutions(sol_json, names, starts)
-        beam_runs.append({"budget": budget, "solutions": n_sol,
-                          "len_diff": pick["diff"] if pick else None,
-                          "pairs": pick["pairs"] if pick else 0})
-        if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
-            break
-    if not n_sol:
-        raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
+            raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
 
     # 3.5) T 型接缝补充搜索：beam 表达不了「短边顶在长边中间」（一条边被两块共用），
     #      而那正是矩形切法的常见形状，不补这一步永远看不到 A2↔B4 这种相邻关系
     split_sols: list = []
-    try:
-        import split_search
-        from assemble import Piece as _Piece      # split_search 内部也这么建
-        sdata = json.loads(scaled_json.read_text(encoding="utf-8"))
-        spieces = {int(d["id"]): _Piece(d) for d in sdata["pieces"]}
-        found = split_search.search(spieces, time.time() + 12, cov=0.30)
-        split_sols = [{"gap_pct": g, "placed": pl, "polys": [p.tolist() for p in ps]}
-                      for g, pl, ps in found[:300]]
-        (out / "split_solutions.json").write_text(
-            json.dumps({"n": len(found), "solutions": split_sols}, ensure_ascii=False),
-            encoding="utf-8")
-        step("split", f"T型接缝补充 {len(found)} 个候选")
-    except Exception as exc:
-        step("split", f"T型接缝搜索跳过：{exc}")
+    if notch_sol is None:
+        try:
+            import split_search
+            from assemble import Piece as _Piece      # split_search 内部也这么建
+            sdata = json.loads(scaled_json.read_text(encoding="utf-8"))
+            spieces = {int(d["id"]): _Piece(d) for d in sdata["pieces"]}
+            found = split_search.search(spieces, time.time() + 12, cov=0.30)
+            split_sols = [{"gap_pct": g, "placed": pl, "polys": [p.tolist() for p in ps]}
+                          for g, pl, ps in found[:300]]
+            (out / "split_solutions.json").write_text(
+                json.dumps({"n": len(found), "solutions": split_sols}, ensure_ascii=False),
+                encoding="utf-8")
+            step("split", f"T型接缝补充 {len(found)} 个候选")
+        except Exception as exc:
+            step("split", f"T型接缝搜索跳过：{exc}")
 
-    pick = rerank_solutions(sol_json, names, starts, extra_sols=split_sols)
-    # 4) 并集评估
-    step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
-    _run("eval_union.py",
-         ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step, steps=steps,
-         logs_dir=logs)
+        pick = rerank_solutions(sol_json, names, starts, extra_sols=split_sols)
+
+        # 5) 并集评估
+        step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
+        _run("eval_union.py",
+             ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step,
+             steps=steps, logs_dir=logs)
 
     # 5) 渲染成品图
     step("render", "按位姿贴回真实像素…")
@@ -929,7 +1086,22 @@ def solve(
     step("rerank", "按对接边长度一致度重排候选…")
     solution = None
     ranking: dict = {"beam_runs": beam_runs}
-    if pick:
+    if notch_sol is not None:
+        solution = notch_sol
+        ranking.update({
+            "chosen": "notch-bijection",
+            "notch_matches": [
+                {"triangle": m.get("triangle_label"), "notch": m.get("notch_index"),
+                 "shape_err": round(float(m.get("shape_err", 0.0)), 4)}
+                for m in (notch_doc.get("matches") or [])
+            ],
+            "notch_coverage": notch_doc.get("coverage"),
+        })
+        (out / "chosen_solution.json").write_text(
+            json.dumps({"ranking": ranking, **solution}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    elif pick:
         entry = pick["entry"]
         solution = {"placed": entry.get("placed"), "polys": entry.get("polys")}
         ranking.update({
@@ -1018,8 +1190,8 @@ def solve(
     #      （空隙大、长度差大），排不进前 5，但用户可能就是想看这种
     t_joint_rows = []
     for idx, entry in enumerate(split_sols):
-        info = solution_metrics(entry, names, starts, share=0.25)
-        if info is None:
+        tinfo = solution_metrics(entry, names, starts, share=0.25)   # 别叫 info：会覆盖上面的 joints
+        if tinfo is None:
             continue
         ids = [int(x[0]) for x in (entry.get("placed") or [])]
         labeled = [(names.get(pid, str(pid)), np.asarray(poly, float), starts.get(pid))
@@ -1039,8 +1211,8 @@ def solve(
                 partial.append(j)
         if not partial:
             continue
-        t_joint_rows.append({"entry": entry, "metrics": info, "score": info["score"],
-                             "t": partial})    
+        t_joint_rows.append({"entry": entry, "metrics": tinfo, "score": tinfo["score"],
+                             "t": partial})
     t_joint_rows.sort(key=lambda r: r["score"])
     base_rank = len(candidates)
     for k, row in enumerate(t_joint_rows[:3], start=1):
