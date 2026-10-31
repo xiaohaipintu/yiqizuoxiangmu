@@ -238,6 +238,91 @@ def find_joints(pieces: list, tol: float = 3.0, share: float = 0.3) -> list:
 
 
 # --------------------------------------------------------------------------
+# 候选解重排：eval_union 只看空洞/重叠，分不出「接错了边」
+# --------------------------------------------------------------------------
+def eval_metrics(polys: list) -> dict:
+    """用 src/eval_union.py 的 evaluate() 算空洞/重叠/凸包空隙。"""
+    try:
+        if str(SRC_DIR) not in sys.path:
+            sys.path.insert(0, str(SRC_DIR))
+        import eval_union  # noqa: E402
+        ps = [np.asarray(p, dtype=float) for p in polys]
+        m = eval_union.evaluate(ps)
+        out = {
+            "holes_pct": round(float(m["holes_pct"]), 3),
+            "overlap_pct": round(float(m["overlap_pct"]), 3),
+        }
+        try:
+            out["hull_gap_pct"] = round(float(eval_union.hull_gap(ps)), 3)
+        except Exception:
+            pass
+        return out
+    except Exception:
+        return {}
+
+
+def _joint_length_diff(joints: list, lengths: dict) -> float:
+    if not joints:
+        return 999.0
+    diffs = []
+    for j in joints:
+        la = lengths.get(j["a"])
+        lb = lengths.get(j["b"])
+        if not la or not lb:
+            continue
+        diffs.append(abs(la - lb) / max(la, lb) * 100.0)
+    return round(float(np.mean(diffs)), 2) if diffs else 999.0
+
+
+def rerank_solutions(sol_json: Path, names: dict, starts: dict,
+                     share: float = 0.9) -> dict | None:
+    """在 beam 给出的候选里挑「边接得最吻合」的那个。
+
+    eval_union.py 只按空洞/重叠排序，而错误的拼法同样是 0 空洞 0 重叠
+    （碎片错边相接一样能拼满），所以必须再按**对接边长度一致度**重排。
+
+    返回 {"entry": 候选解, "joints": [...], "diff": 平均长度差%, "index": i}
+    """
+    try:
+        doc = json.loads(Path(sol_json).read_text(encoding="utf-8"))
+        sols = doc.get("solutions") or []
+    except Exception:
+        return None
+    best = None
+    for idx, entry in enumerate(sols):
+        placed = entry.get("placed") or []
+        polys = entry.get("polys") or []
+        if not placed or len(placed) != len(polys):
+            continue
+        labeled = [(names.get(int(item[0]), str(item[0])),
+                    np.asarray(polys[k], dtype=np.float64),
+                    starts.get(int(item[0]))) for k, item in enumerate(placed)]
+        joints = find_joints(labeled, share=share)
+        pieces = set()
+        for j in joints:
+            pieces.add(j["a"].rstrip("0123456789"))
+            pieces.add(j["b"].rstrip("0123456789"))
+        if len(pieces) < len(names):        # 有碎片没接上，直接淘汰
+            continue
+        lengths = {}
+        for k, item in enumerate(placed):
+            pid = int(item[0])
+            poly = poly_by_id_edges = np.asarray(polys[k], dtype=np.float64)
+            for no, a, b in edges_of(poly, starts.get(pid)):
+                lengths[f"{names.get(pid, str(pid))}{no}"] = float(
+                    np.linalg.norm(np.asarray(b) - np.asarray(a)))
+        diff = _joint_length_diff(joints, lengths)
+        cand = {"entry": entry, "joints": joints, "diff": diff,
+                "index": idx, "pairs": len(joints)}
+        # 关键：长度一致度优先，其次贴合对数多的
+        key = (diff, -len(joints))
+        if best is None or key < best["_key"]:
+            cand["_key"] = key
+            best = cand
+    return best
+
+
+# --------------------------------------------------------------------------
 # 调用 src/ 下的脚本
 # --------------------------------------------------------------------------
 def _run(script: str, args: list, timeout: float, log, steps: dict | None = None,
@@ -281,9 +366,14 @@ def render_assembled(
     labels_out: str | Path | None = None,
     edge_starts: dict | None = None,
     info: dict | None = None,
+    solution: dict | None = None,
+    fg_mask_path: str | Path | None = None,
 ) -> bool:
     img = read_image(image_path)
-    sol = json.loads(Path(best_union_path).read_text(encoding="utf-8"))
+    if solution is not None:
+        sol = solution
+    else:
+        sol = json.loads(Path(best_union_path).read_text(encoding="utf-8"))
     placed = sol.get("placed") or []
     polys = sol.get("polys") or []
     if not placed or not polys:
@@ -309,6 +399,19 @@ def render_assembled(
     h_img, w_img = img.shape[:2]
     painted = 0
     canvas_polys = []
+
+    # 前景掩膜：只贴真实碎片像素，避免把碎片边缘那一圈背景色也贴上去
+    # （否则每块都自带一条绿色包边，拼缝看起来就像没拼上）
+    fg = None
+    if fg_mask_path:
+        try:
+            fg = read_image(fg_mask_path)
+            if fg.ndim == 3:
+                fg = cv2.cvtColor(fg, cv2.COLOR_BGR2GRAY)
+            if fg.shape[:2] != (h_img, w_img):
+                fg = None
+        except Exception:
+            fg = None
     for k, item in enumerate(placed):
         if k >= len(polys):
             break
@@ -358,6 +461,14 @@ def render_assembled(
         poly_canvas = poly_world - off
         cv2.fillPoly(mask, [np.round(poly_canvas).astype(np.int32)], 255)
         sel = mask > 0
+        if fg is not None:
+            fg_warped = cv2.warpAffine(
+                fg[y0:y1, x0:x1], mat_crop, (width, height),
+                flags=cv2.INTER_NEAREST, borderValue=0,
+            )
+            # 外扩 1px：宁可轻微重叠，也不要露出白缝
+            fg_warped = cv2.dilate(fg_warped, np.ones((3, 3), np.uint8))
+            sel = sel & (fg_warped > 127)
         if not sel.any():
             continue
         canvas[sel] = warped[sel]
@@ -525,8 +636,40 @@ def solve(
     assembled = out / "assembled.jpg"
     assembled_labels = out / "assembled_labels.jpg"
     best_union = out / "best_union.json"
+
+    # 4.5) 候选重排：eval_union 只按空洞/重叠排序，分不出「接错了边」
+    #      （错边相接同样能拼满、同样是 0 空洞 0 重叠），所以再按对接边长度一致度挑一遍
+    step("rerank", "按对接边长度一致度重排候选…")
+    solution = None
+    ranking: dict = {}
+    pick = None
+    try:
+        pick = rerank_solutions(sol_json, names, starts)
+    except Exception as exc:
+        ranking["error"] = str(exc)
+    if pick:
+        entry = pick["entry"]
+        solution = {"placed": entry.get("placed"), "polys": entry.get("polys")}
+        ranking = {
+            "chosen": f"beam#{pick['index']}",
+            "mean_len_diff_pct": pick["diff"],
+            "joint_pairs": pick["pairs"],
+        }
+        (out / "chosen_solution.json").write_text(
+            json.dumps({"ranking": ranking, **solution}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    elif best_union.exists():
+        try:
+            solution = json.loads(best_union.read_text(encoding="utf-8"))
+            ranking = {"chosen": "best_union"}
+        except Exception:
+            solution = None
+
     metrics: dict = {}
-    if best_union.exists():
+    if solution and solution.get("polys"):
+        metrics = eval_metrics(solution["polys"])
+    if not metrics and best_union.exists():
         try:
             best = json.loads(best_union.read_text(encoding="utf-8"))
             metrics = {
@@ -535,13 +678,16 @@ def solve(
             }
         except Exception:
             metrics = {}
+
     rendered = False
     info: dict = {}
-    if best_union.exists():
+    if solution:
         try:
             rendered = render_assembled(image_path, scaled_json, best_union, assembled,
                                         names=names, labels_out=assembled_labels,
-                                        edge_starts=starts, info=info)
+                                        edge_starts=starts, info=info,
+                                        solution=solution,
+                                        fg_mask_path=out / "01_mask.png")
         except Exception as exc:                      # 渲染失败退回排名图
             metrics["render_error"] = str(exc)
     if not rendered:
@@ -559,6 +705,7 @@ def solve(
         "steps": steps,
         "labels": labels,
         "joints": info.get("joints", []),
+        "ranking": ranking,
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }

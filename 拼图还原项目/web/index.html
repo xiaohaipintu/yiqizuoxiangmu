@@ -452,7 +452,7 @@
     $('link-log').href = base + 'run.log';
     paintImages();
     paintLabelTable(result.labels || []);
-    paintJoints(result.joints || [], result.labels || []);
+    paintJoints(result.joints || [], result.labels || [], result.ranking || {});
 
     var m = result.metrics || {};
     $('m-pieces').textContent = result.pieces;
@@ -494,17 +494,25 @@
     }).join('');
   }
 
-  function paintJoints(joints, labels) {
+  function paintJoints(joints, labels, ranking) {
     var box = $('joints-table');
+    var head = '';
+    if (ranking && ranking.chosen) {
+      head = '<p class="label" style="width:100%;margin:0 0 6px;">' +
+        '选中的候选：' + ranking.chosen +
+        (ranking.mean_len_diff_pct !== undefined
+          ? ' · 对接边长度差 ' + ranking.mean_len_diff_pct + '%' : '') +
+        '</p>';
+    }
     if (!joints.length) {
-      box.innerHTML = '<p class="label">没检测到贴合的边对（搜索失败或碎片被遮挡时会出现）。</p>';
+      box.innerHTML = head + '<p class="label">没检测到贴合的边对（搜索失败或碎片被遮挡时会出现）。</p>';
       return;
     }
     var joined = {};
     joints.forEach(function (j) { joined[j.a] = 1; joined[j.b] = 1; });
     var total = (labels || []).reduce(function (n, p) { return n + (p.edges || []).length; }, 0);
     var free = total - Object.keys(joined).length;
-    box.innerHTML = joints.map(function (j) {
+    box.innerHTML = head + joints.map(function (j) {
       return '<span class="chip"><b>' + j.a + '</b> ↔ <b>' + j.b + '</b> 贴合 ' + j.share + '%</span>';
     }).join('') + (free > 0
       ? '<span class="chip" style="opacity:.7;">另有 ' + free + ' 条边属于外轮廓</span>'

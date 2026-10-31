@@ -39,6 +39,7 @@ ALLOWED_FILES = {
     "upload_labels.jpg", "assembled_labels.jpg",
     "01_mask.png", "02_pieces.png", "beam_solutions.json",
     "best_union.json", "pieces.json", "pieces_scaled.json", "result.json",
+    "chosen_solution.json",
     "run.log", "segment.log", "rescale_pieces.log", "beam_search.log",
     "eval_union.log", "error.log",
 }
