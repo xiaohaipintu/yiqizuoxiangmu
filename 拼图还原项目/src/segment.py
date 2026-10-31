@@ -4,8 +4,11 @@
     python src/segment.py --image input/pieces.jpg --out out
 输出:
     out/pieces.json      每块碎片的顶点、面积、边长、内角
-    out/01_mask.png      红色分割掩码
+    out/01_mask.png      前景掩膜（已剔除小于 --min-area 的杂点，背景干净）
+    out/01_mask_raw.png  未清理的原始掩膜，仅排查用
+    out/01_alpha.png     软边蒙版（0~255 渐变），贴图用它才不会带背景色包边
     out/02_pieces.png    编号 + 边编号的调试图
+    out/03_cutouts.png   逐块抠图预览（白底网格），用来肉眼检查抠得干不干净
 """
 from __future__ import annotations
 
@@ -31,12 +34,8 @@ def red_mask(bgr: np.ndarray) -> np.ndarray:
     return mask
 
 
-def auto_mask(bgr: np.ndarray, delta_e: float = 40.0) -> np.ndarray:
-    """通用做法：从画面四边取背景色，凡与背景色差超过阈值的是前景。
-
-    这样换一张图（红纸、紫纸、任意底色）都不用改阈值；纸上印的深色小标记也归入前景，
-    不会在碎片内部挖洞。
-    """
+def background_delta(bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """从画面四边取背景色，返回 (每个像素与背景的 Lab 色差 ΔE, 背景色本身)。"""
     h, w = bgr.shape[:2]
     b = max(4, min(h, w) // 40)
     border = np.vstack(
@@ -50,11 +49,110 @@ def auto_mask(bgr: np.ndarray, delta_e: float = 40.0) -> np.ndarray:
     bg = np.median(border, axis=0).astype(np.uint8)
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     bg_lab = cv2.cvtColor(bg.reshape(1, 1, 3), cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
-    d = np.linalg.norm(lab - bg_lab, axis=2)
+    return np.linalg.norm(lab - bg_lab, axis=2), bg
+
+
+def auto_mask(bgr: np.ndarray, delta_e: float = 40.0) -> np.ndarray:
+    """通用做法：从画面四边取背景色，凡与背景色差超过阈值的是前景。
+
+    这样换一张图（红纸、紫纸、任意底色）都不用改阈值；纸上印的深色小标记也归入前景，
+    不会在碎片内部挖洞。
+    """
+    d, _bg = background_delta(bgr)
     mask = (d > delta_e).astype(np.uint8) * 255
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
     return mask
+
+
+def drop_specks(mask: np.ndarray, min_area: float) -> tuple[np.ndarray, int, int]:
+    """抹掉面积 < min_area 的连通块。
+
+    这些是背景上的小污点/纸屑，本来就不是碎片（后续也不会被当成 pieces），
+    但会实实在在地画在 01_mask.png 上，看起来就是“抠图没抠干净”。
+    """
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    keep = np.zeros_like(mask)
+    dropped = 0
+    dropped_area = 0
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= min_area:
+            keep[labels == i] = 255
+        else:
+            dropped += 1
+            dropped_area += area
+    return keep, dropped, dropped_area
+
+
+def soft_alpha(mask: np.ndarray, delta: np.ndarray | None = None,
+               lo: float = 35.0, hi: float = 55.0) -> np.ndarray:
+    """软边蒙版：边缘按“前景程度”给 0~255 的渐变，而不是非黑即白。
+
+    二值掩膜 + 膨胀贴图会在碎片外围带一条背景色包边（实测成品每块都有绿边）；
+    这里让抗锯齿/半背景像素带上部分透明度，贴上去就和底色自然融合。
+    掩膜外 1px 内允许渐变，再远一律透明，避免把阴影当成半透明前景渗出去。
+    """
+    if delta is not None:
+        grad = np.clip((delta - lo) / max(1e-6, hi - lo), 0.0, 1.0)
+    else:
+        grad = cv2.GaussianBlur(mask, (0, 0), 1.2).astype(np.float32) / 255.0
+    allowed = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+    grad = np.where(allowed, grad, 0.0)
+    return (np.clip(grad, 0.0, 1.0) * 255).astype(np.uint8)
+
+
+def render_cutouts(bgr: np.ndarray, alpha: np.ndarray, pieces: list,
+                   path: pathlib.Path, tile: int = 260, pad: int = 14) -> None:
+    """把每块碎片按 alpha 抠出来，排在白底网格里 —— 抠得干不干净一眼就看得到。"""
+    if not pieces:
+        return
+    h_img, w_img = bgr.shape[:2]
+    tiles = []
+    for p in pieces:
+        poly = np.array(p["polygon"], np.float64)
+        x0 = max(int(np.floor(poly[:, 0].min())) - 2, 0)
+        y0 = max(int(np.floor(poly[:, 1].min())) - 2, 0)
+        x1 = min(int(np.ceil(poly[:, 0].max())) + 2, w_img)
+        y1 = min(int(np.ceil(poly[:, 1].max())) + 2, h_img)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        crop = bgr[y0:y1, x0:x1].astype(np.float32)
+        a = (alpha[y0:y1, x0:x1].astype(np.float32) / 255.0)[..., None]
+        comp = (crop * a + 255.0 * (1.0 - a)).astype(np.uint8)   # 白底合成
+        h, w = comp.shape[:2]
+        s = min((tile - 2 * pad) / max(w, 1), (tile - 2 * pad) / max(h, 1), 1.0)
+        comp = cv2.resize(comp, (max(1, int(w * s)), max(1, int(h * s))),
+                          interpolation=cv2.INTER_AREA)
+        tiles.append((p["id"], comp))
+
+    cols = max(1, int(np.ceil(np.sqrt(len(tiles)))))
+    rows = int(np.ceil(len(tiles) / cols))
+    canvas = np.full((rows * tile, cols * tile, 3), 255, np.uint8)
+    for k, (pid, comp) in enumerate(tiles):
+        r, c = divmod(k, cols)
+        cy, cx = r * tile, c * tile
+        oy = cy + (tile - comp.shape[0]) // 2
+        ox = cx + (tile - comp.shape[1]) // 2
+        canvas[oy:oy + comp.shape[0], ox:ox + comp.shape[1]] = comp
+        cv2.rectangle(canvas, (cx, cy), (cx + tile - 1, cy + tile - 1), (222, 222, 222), 1)
+        cv2.putText(canvas, f"#{pid}", (cx + 8, cy + 26),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+    cv2.imwrite(str(path), canvas)
+
+
+def residue_stats(mask: np.ndarray, pieces: list) -> list:
+    """每块碎片的多边形内，有多少像素其实不是前景（= 拟合时被多边形“撑”进来的背景）。"""
+    rows = []
+    for p in pieces:
+        poly = np.array(p["polygon"], np.int32)
+        canvas = np.zeros(mask.shape, np.uint8)
+        cv2.fillPoly(canvas, [poly], 255)
+        inside = canvas > 0
+        total = int(np.count_nonzero(inside))
+        leak = int(np.count_nonzero(inside & (mask == 0)))
+        rows.append((p["id"], total, leak, 100.0 * leak / max(1, total)))
+    return rows
 
 
 def _line_from_points(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -187,7 +285,16 @@ def main() -> int:
     print(f"图像尺寸: {bgr.shape[1]}x{bgr.shape[0]}")
 
     mask = red_mask(bgr) if args.mode == "red" else auto_mask(bgr, args.delta_e)
+    delta = None
+    if args.mode == "auto":
+        delta, bg = background_delta(bgr)
+        print("背景色 BGR %s" % bg.tolist())
+    cv2.imwrite(str(outdir / "01_mask_raw.png"), mask)
+    # 剔掉背景上的小污点/纸屑：它们本就不算碎片，但会画在掩膜上，看起来就是“没抠干净”
+    mask, n_specks, speck_area = drop_specks(mask, args.min_area)
+    alpha = soft_alpha(mask, delta)
     cv2.imwrite(str(outdir / "01_mask.png"), mask)
+    cv2.imwrite(str(outdir / "01_alpha.png"), alpha)
 
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     pieces = []
@@ -239,6 +346,7 @@ def main() -> int:
             cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
             cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     cv2.imwrite(str(outdir / "02_pieces.png"), vis)
+    render_cutouts(bgr, alpha, pieces, outdir / "03_cutouts.png")
 
     with open(outdir / "pieces.json", "w", encoding="utf-8") as f:
         json.dump({"image": args.image, "pieces": pieces}, f, ensure_ascii=False, indent=2)
@@ -252,6 +360,10 @@ def main() -> int:
         print(f"{p['id']:>3} {len(p['polygon']):>4} {p['area']:>9.0f} {dev:>7.1f}% {p['perimeter']:>7.0f} {lens:<38} {angs}")
     total = sum(p["area"] for p in pieces)
     print(f"碎片总面积 {total:.0f} px², 外接方形边长约 {total ** 0.5:.1f} px")
+    print(f"掩膜清理：剔除杂点 {n_specks} 个（共 {speck_area:.0f} px）")
+    print("残留自检（多边形内夹带的背景像素）：")
+    for pid, tot, leak, pct in residue_stats(mask, pieces):
+        print(f"  #{pid}  多边形内 {tot} px  夹带背景 {leak} px ({pct:.2f}%)")
     return 0
 
 

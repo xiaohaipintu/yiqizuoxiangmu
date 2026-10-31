@@ -485,6 +485,7 @@ def render_assembled(
     info: dict | None = None,
     solution: dict | None = None,
     fg_mask_path: str | Path | None = None,
+    fg_alpha_path: str | Path | None = None,
 ) -> bool:
     img = read_image(image_path)
     if solution is not None:
@@ -520,15 +521,22 @@ def render_assembled(
     # 前景掩膜：只贴真实碎片像素，避免把碎片边缘那一圈背景色也贴上去
     # （否则每块都自带一条绿色包边，拼缝看起来就像没拼上）
     fg = None
-    if fg_mask_path:
+    # 软边 alpha 优先（01_alpha.png 是 0~255 渐变），没有才退回二值 01_mask.png
+    for cand in (fg_alpha_path, fg_mask_path):
+        if not cand:
+            continue
         try:
-            fg = read_image(fg_mask_path)
-            if fg.ndim == 3:
-                fg = cv2.cvtColor(fg, cv2.COLOR_BGR2GRAY)
-            if fg.shape[:2] != (h_img, w_img):
-                fg = None
+            f = read_image(cand)
         except Exception:
-            fg = None
+            continue
+        if f is None:
+            continue
+        if f.ndim == 3:
+            f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+        if f.shape[:2] != (h_img, w_img):
+            continue
+        fg = f
+        break
     for k, item in enumerate(placed):
         if k >= len(polys):
             break
@@ -581,19 +589,50 @@ def render_assembled(
         if fg is not None:
             fg_warped = cv2.warpAffine(
                 fg[y0:y1, x0:x1], mat_crop, (width, height),
-                flags=cv2.INTER_NEAREST, borderValue=0,
-            )
-            # 外扩 1px：宁可轻微重叠，也不要露出白缝
-            fg_warped = cv2.dilate(fg_warped, np.ones((3, 3), np.uint8))
-            sel = sel & (fg_warped > 127)
-        if not sel.any():
-            continue
-        canvas[sel] = warped[sel]
-        painted += int(sel.sum())
+                flags=cv2.INTER_LINEAR, borderValue=0,
+            ).astype(np.float32) / 255.0
+            # 只在多边形内贴，防止碎片在源图上的像素溢出到邻居地盘
+            sel = np.where(sel, fg_warped, 0.0)
+            sel[sel < 0.04] = 0.0
+            if not (sel > 0).any():
+                continue
+            # 软合成：边缘按 alpha 与已有内容混合，取代原来「二值掩膜 + 膨胀 3×3」。
+            # 膨胀会把碎片外侧的背景像素拉回来，成品每块都镶一条绿边。
+            a3 = sel[..., None]
+            canvas = np.clip(warped.astype(np.float32) * a3
+                             + canvas.astype(np.float32) * (1.0 - a3),
+                             0, 255).astype(np.uint8)
+            painted += int((sel > 0.5).sum())
+        else:
+            if not sel.any():
+                continue
+            canvas[sel] = warped[sel]
+            painted += int(sel.sum())
         canvas_polys.append((pid, poly_canvas))
 
     if painted == 0:
         return False
+
+    # 软边合成后拼缝处会留下发丝级白缝（二值掩膜时代的膨胀补边被去掉了）。
+    # 这里把「不接触画布边缘的小白块」当作缝隙，用周围像素 inpaint 填平：
+    # 既保留软边（不再有背景色包边），又不会露出白线。
+    try:
+        white = ((canvas > 244).all(axis=2)).astype(np.uint8)
+        n_w, lab_w, st_w, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+        border_labels = set(lab_w[0, :]) | set(lab_w[-1, :]) \
+            | set(lab_w[:, 0]) | set(lab_w[:, -1])
+        holes = np.zeros((height, width), np.uint8)
+        for i in range(1, n_w):
+            if i in border_labels:
+                continue
+            if int(st_w[i, cv2.CC_STAT_AREA]) <= 400:
+                holes[lab_w == i] = 255
+        if holes.any():
+            canvas = cv2.inpaint(canvas, holes, 2, cv2.INPAINT_TELEA)
+            if info is not None:
+                info["seam_filled_px"] = int(np.count_nonzero(holes))
+    except Exception:
+        pass
 
     if max(width, height) > max_side:
         scale = max_side / float(max(width, height))
@@ -832,7 +871,8 @@ def solve(
                                         names=names, labels_out=assembled_labels,
                                         edge_starts=starts, info=info,
                                         solution=solution,
-                                        fg_mask_path=out / "01_mask.png")
+                                        fg_mask_path=out / "01_mask.png",
+                                        fg_alpha_path=out / "01_alpha.png")
         except Exception as exc:                      # 渲染失败退回排名图
             metrics["render_error"] = str(exc)
     if not rendered:
