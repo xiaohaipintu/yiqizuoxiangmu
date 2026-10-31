@@ -272,6 +272,13 @@
     </div>
 
     <div class="card" style="margin-top:12px;">
+      <details open>
+        <summary>拼合关系（哪条边接了哪条边）</summary>
+        <div class="chip-wrap" id="joints-table"></div>
+      </details>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
       <details>
         <summary>查看候选排名图 / 原始分割结果 / 运行日志</summary>
         <img class="result-img" id="img-rank" alt="候选排名" style="margin-top:8px;" />
@@ -445,6 +452,7 @@
     $('link-log').href = base + 'run.log';
     paintImages();
     paintLabelTable(result.labels || []);
+    paintJoints(result.joints || [], result.labels || []);
 
     var m = result.metrics || {};
     $('m-pieces').textContent = result.pieces;
@@ -485,6 +493,24 @@
         '</div><div class="chip-wrap">' + chips + '</div></div>';
     }).join('');
   }
+
+  function paintJoints(joints, labels) {
+    var box = $('joints-table');
+    if (!joints.length) {
+      box.innerHTML = '<p class="label">没检测到贴合的边对（搜索失败或碎片被遮挡时会出现）。</p>';
+      return;
+    }
+    var joined = {};
+    joints.forEach(function (j) { joined[j.a] = 1; joined[j.b] = 1; });
+    var total = (labels || []).reduce(function (n, p) { return n + (p.edges || []).length; }, 0);
+    var free = total - Object.keys(joined).length;
+    box.innerHTML = joints.map(function (j) {
+      return '<span class="chip"><b>' + j.a + '</b> ↔ <b>' + j.b + '</b> 贴合 ' + j.share + '%</span>';
+    }).join('') + (free > 0
+      ? '<span class="chip" style="opacity:.7;">另有 ' + free + ' 条边属于外轮廓</span>'
+      : '');
+  }
+
   function handleFile(file) {
     if (!file) return;
     fileInput.value = '';

@@ -109,18 +109,31 @@ def piece_name(index: int) -> str:
     return out
 
 
-def edges_of(poly) -> list:
+def edge_start_index(poly) -> int:
+    """边的编号起点：最上方的顶点（同高取最左）。"""
+    pts = np.asarray(poly, dtype=np.float64)
+    n = len(pts)
+    if n < 3:
+        return 0
+    return min(range(n), key=lambda k: (round(float(pts[k][1]), 2),
+                                        round(float(pts[k][0]), 2)))
+
+
+def edges_of(poly, start: int | None = None) -> list:
     """返回 [(边序号, 起点, 终点)]。
 
-    编号规则（固定、可复现）：从**最上方的顶点**开始（同高取最左），
+    编号规则（固定、可复现）：从 start 顶点开始（默认取最上方顶点，同高取最左），
     按多边形顶点顺序环状编号，第 k 条边 = 第 k 个顶点 → 第 k+1 个顶点。
+
+    ⚠️ 拼好的图上必须传入**原图**算出的 start，否则碎片被旋转后
+    「最上方顶点」会变，同一个名字就指到别的边上了。
     """
     pts = np.asarray(poly, dtype=np.float64)
     n = len(pts)
     if n < 3:
         return []
-    start = min(range(n), key=lambda k: (round(float(pts[k][1]), 2),
-                                         round(float(pts[k][0]), 2)))
+    if start is None:
+        start = edge_start_index(pts)
     out = []
     for k in range(n):
         i = (start + k) % n
@@ -143,12 +156,15 @@ def _text(img, s: str, org, size: float, color, thick: int) -> None:
 def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
     """在图上标出碎片名（质心）与边名（边中点，略往内部偏）。
 
-    pieces: [(碎片名, 多边形坐标数组), …]
+    pieces: [(碎片名, 多边形坐标数组[, 边编号起点顶点索引]), …]
+    第三个元素必须传「原图」上算出的起点，这样成品图上的边名和原图一一对应。
     """
     if not pieces:
         return img
     scale = max(0.45, img.shape[0] / 950.0)      # 字号随图片高度缩放
-    for name, poly in pieces:
+    for item in pieces:
+        name, poly = item[0], item[1]
+        start = item[2] if len(item) > 2 else None
         pts = np.asarray(poly, dtype=np.float64)
         if len(pts) < 3:
             continue
@@ -160,7 +176,7 @@ def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
         centroid = pts.mean(axis=0)
         _text(img, name, centroid, 1.15 * scale, (255, 255, 255),
               max(2, int(round(2 * scale))))
-        for no, a, b in edges_of(pts):
+        for no, a, b in edges_of(pts, start):
             mid = (a + b) / 2.0
             d = mid - centroid
             length = float(np.linalg.norm(d))
@@ -169,6 +185,56 @@ def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
             _text(img, f"{name}{no}", mid, 0.62 * scale, (138, 240, 254),
                   max(1, int(round(1.6 * scale))))
     return img
+
+
+# --------------------------------------------------------------------------
+# 拼合关系：算出来哪条边和哪条边真的贴在一起（对照表用）
+# --------------------------------------------------------------------------
+def _share_on_segment(a1, b1, a2, b2, tol: float) -> float:
+    """a1-b1 上有多少比例的采样点落在 a2-b2 上（tol 像素内）。"""
+    seg = b1 - a1
+    length = float(np.linalg.norm(seg))
+    if length < 1e-6:
+        return 0.0
+    other = b2 - a2
+    other_len2 = float(other @ other)
+    if other_len2 < 1e-9:
+        return 0.0
+    ts = np.linspace(0.0, 1.0, max(int(length / 2.0), 8))
+    pts = a1[None, :] + seg[None, :] * ts[:, None]
+    t = np.clip(((pts - a2[None, :]) @ other) / other_len2, 0.0, 1.0)
+    proj = a2[None, :] + t[:, None] * other[None, :]
+    dist = np.linalg.norm(pts - proj, axis=1)
+    return float((dist <= tol).mean())
+
+
+def find_joints(pieces: list, tol: float = 3.0, share: float = 0.3) -> list:
+    """找出真正贴合的边对。
+
+    pieces: [(碎片名, 多边形, 边编号起点顶点索引), …]
+    返回 [{"a": "A1", "b": "C4", "share": 100.0}]，按贴合比例降序。
+    """
+    edges = []          # (边名, 起点, 终点, 碎片名)
+    for item in pieces:
+        name, poly = item[0], item[1]
+        start = item[2] if len(item) > 2 else None
+        for no, a, b in edges_of(poly, start):
+            edges.append((f"{name}{no}", np.asarray(a, float), np.asarray(b, float), name))
+
+    out = []
+    for i in range(len(edges)):
+        for j in range(i + 1, len(edges)):
+            n1, a1, b1, p1 = edges[i]
+            n2, a2, b2, p2 = edges[j]
+            if p1 == p2:
+                continue
+            best = max(
+                _share_on_segment(a1, b1, a2, b2, tol),
+                _share_on_segment(a2, b2, a1, b1, tol),
+            )
+            if best >= share:
+                out.append({"a": n1, "b": n2, "share": round(best * 100, 1)})
+    return sorted(out, key=lambda x: -x["share"])
 
 
 # --------------------------------------------------------------------------
@@ -213,6 +279,8 @@ def render_assembled(
     max_side: int = 1400,
     names: dict | None = None,
     labels_out: str | Path | None = None,
+    edge_starts: dict | None = None,
+    info: dict | None = None,
 ) -> bool:
     img = read_image(image_path)
     sol = json.loads(Path(best_union_path).read_text(encoding="utf-8"))
@@ -309,11 +377,19 @@ def render_assembled(
         canvas_polys = [(pid, poly * scale) for pid, poly in canvas_polys]
     write_image(out_path, canvas, quality=93)
 
-    # 带名称的版本：碎片名（A/B/C）+ 边名（A1/A2…），和原图上的编号一致
+    # 带名称的版本：碎片名（A/B/C）+ 边名（A1/A2…）
+    # ⚠️ 边编号起点必须沿用**原图**算出的顶点索引，否则碎片在成品图上被旋转后
+    #    「最上方顶点」变了，同一个名字会指到别的边上去（曾导致 A1 被误读成 B6）
+    labeled = [
+        (names.get(pid, str(pid)) if names else str(pid),
+         poly,
+         (edge_starts or {}).get(pid))
+        for pid, poly in canvas_polys
+    ]
     if labels_out:
-        named = [(names.get(pid, str(pid)) if names else str(pid), poly)
-                 for pid, poly in canvas_polys]
-        write_image(labels_out, draw_labels(canvas.copy(), named), quality=93)
+        write_image(labels_out, draw_labels(canvas.copy(), labeled), quality=93)
+    if info is not None:
+        info["joints"] = find_joints(labeled)
     return True
 
 
@@ -384,12 +460,14 @@ def solve(
     # 1.5) 给碎片和边命名：A/B/C… 与 A1/A2/…（原图与成品图用同一套编号）
     piece_list = json.loads(pieces_json.read_text(encoding="utf-8")).get("pieces", [])
     names: dict[int, str] = {}
+    starts: dict[int, int] = {}          # 每块碎片的边编号起点顶点（必须原图算一次、全程复用）
     labels: list[dict] = []
     for i, piece in enumerate(piece_list):
         pid = int(piece["id"])
         name = piece_name(i)
         names[pid] = name
         poly = np.asarray(piece["polygon"], dtype=np.float64)
+        starts[pid] = edge_start_index(poly)
         labels.append({
             "name": name,
             "id": pid,
@@ -400,14 +478,16 @@ def solve(
                     "name": f"{name}{no}",
                     "length": round(float(np.linalg.norm(b - a)), 1),
                 }
-                for no, a, b in edges_of(poly)
+                for no, a, b in edges_of(poly, starts[pid])
             ],
         })
     # 原图上的标注版
     upload_labels = out / "upload_labels.jpg"
     try:
         marked = src_img.copy()
-        draw_labels(marked, [(names[int(p["id"])], np.asarray(p["polygon"], float))
+        draw_labels(marked, [(names[int(p["id"])],
+                              np.asarray(p["polygon"], float),
+                              starts[int(p["id"])])
                              for p in piece_list])
         write_image(upload_labels, marked, quality=92)
     except Exception:
@@ -456,10 +536,12 @@ def solve(
         except Exception:
             metrics = {}
     rendered = False
+    info: dict = {}
     if best_union.exists():
         try:
             rendered = render_assembled(image_path, scaled_json, best_union, assembled,
-                                        names=names, labels_out=assembled_labels)
+                                        names=names, labels_out=assembled_labels,
+                                        edge_starts=starts, info=info)
         except Exception as exc:                      # 渲染失败退回排名图
             metrics["render_error"] = str(exc)
     if not rendered:
@@ -476,6 +558,7 @@ def solve(
         "metrics": metrics,
         "steps": steps,
         "labels": labels,
+        "joints": info.get("joints", []),
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }
