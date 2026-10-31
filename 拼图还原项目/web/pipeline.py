@@ -161,7 +161,10 @@ def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
     """
     if not pieces:
         return img
-    scale = max(0.45, img.shape[0] / 950.0)      # 字号随图片高度缩放
+    # 字号随图片高度缩放，但下限抬到 0.9：小图（如 810 高）原来会缩到 0.53，
+    # 边名糊成一团看不清。整体乘数也一并放大。
+    scale = max(0.9, img.shape[0] / 900.0)
+    line_thick = max(2, int(round(2.4 * scale)))
     for item in pieces:
         name, poly = item[0], item[1]
         start = item[2] if len(item) > 2 else None
@@ -171,19 +174,19 @@ def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
         cv2.polylines(
             img,
             [np.round(pts).astype(np.int32).reshape(-1, 1, 2)],
-            True, (248, 189, 56), max(1, int(round(2 * scale))), cv2.LINE_AA,
+            True, (248, 189, 56), line_thick, cv2.LINE_AA,
         )
         centroid = pts.mean(axis=0)
-        _text(img, name, centroid, 1.15 * scale, (255, 255, 255),
-              max(2, int(round(2 * scale))))
+        _text(img, name, centroid, 1.75 * scale, (255, 255, 255),
+              max(2, int(round(2.6 * scale))))
         for no, a, b in edges_of(pts, start):
             mid = (a + b) / 2.0
             d = mid - centroid
             length = float(np.linalg.norm(d))
             if length > 1e-6:                     # 往碎片内部挪一点，别压在轮廓上
-                mid = mid - d / length * (16 * scale)
-            _text(img, f"{name}{no}", mid, 0.62 * scale, (138, 240, 254),
-                  max(1, int(round(1.6 * scale))))
+                mid = mid - d / length * (26 * scale)
+            _text(img, f"{name}{no}", mid, 1.05 * scale, (138, 240, 254),
+                  max(2, int(round(1.8 * scale))))
     return img
 
 
