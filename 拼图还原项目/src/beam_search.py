@@ -81,6 +81,8 @@ def main() -> int:
     ap.add_argument("--cov", type=float, default=0.35)
     ap.add_argument("--overlap", type=float, default=0.004)
     ap.add_argument("--time", type=float, default=180.0)
+    ap.add_argument("--save", type=int, default=30,
+                    help="最多保存多少个完整解到 beam_solutions.json（上层重排要看更多候选）")
     args = ap.parse_args()
 
     outdir = pathlib.Path(args.out)
@@ -128,7 +130,7 @@ def main() -> int:
     (outdir / "beam_solutions.json").write_text(json.dumps(
         {"n": len(full), "solutions": [{"gap_pct": g, "placed": pl,
                                         "polys": [p.tolist() for p in ps]}
-                                       for g, pl, ps in full[:30]]}, ensure_ascii=False),
+                                       for g, pl, ps in full[:args.save]]}, ensure_ascii=False),
         encoding="utf-8")
     return 0
 

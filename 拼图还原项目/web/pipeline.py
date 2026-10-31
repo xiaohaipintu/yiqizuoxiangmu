@@ -578,17 +578,23 @@ def render_assembled(
         poly_canvas = poly_world - off
         cv2.fillPoly(mask, [np.round(poly_canvas).astype(np.int32)], 255)
         sel = mask > 0
+        alpha_w = None
         if fg is not None:
             fg_warped = cv2.warpAffine(
                 fg[y0:y1, x0:x1], mat_crop, (width, height),
-                flags=cv2.INTER_NEAREST, borderValue=0,
+                flags=cv2.INTER_LINEAR, borderValue=0,
             )
-            # 外扩 1px：宁可轻微重叠，也不要露出白缝
-            fg_warped = cv2.dilate(fg_warped, np.ones((3, 3), np.uint8))
-            sel = sel & (fg_warped > 127)
+            # 软 alpha 合成：边缘按覆盖率过渡，既不出绿边也不出硬白缝
+            alpha_w = np.clip(fg_warped.astype(np.float32) / 255.0, 0.0, 1.0)
+            sel = sel & (alpha_w > 0.35)
         if not sel.any():
             continue
-        canvas[sel] = warped[sel]
+        if alpha_w is not None:
+            a3 = alpha_w[sel][:, None]
+            canvas[sel] = (canvas[sel].astype(np.float32) * (1 - a3)
+                           + warped[sel].astype(np.float32) * a3).astype(np.uint8)
+        else:
+            canvas[sel] = warped[sel]
         painted += int(sel.sum())
         canvas_polys.append((pid, poly_canvas))
 
@@ -691,7 +697,22 @@ def solve(
     if not pieces_json.exists():
         raise RuntimeError("分割失败：没有生成 pieces.json")
 
-    # 1.2) 清理多边形：影子/阴影会把一条直边切成两段，合并掉近共线的假顶点
+    # 1.2) 绿幕抠图重测：YCbCr 键控 + despill + 亚像素边界（比 ΔE 硬阈值准得多）
+    keyed_img = out / "keyed.jpg"
+    alpha_png = out / "key_alpha.png"
+    key_info: dict = {}
+    try:
+        import resegment                      # 同目录模块，延迟导入避免循环依赖
+        key_info = resegment.refine_pieces(
+            image_path, pieces_json, pieces_json, alpha_png, keyed_img
+        )
+        detail = "、".join(f"{c['piece']} {c['vertices']}" for c in key_info.get("changes", []))
+        step("key", f"绿幕抠图重测 {key_info.get('found')} 块：{detail or '无变化'}")
+    except Exception as exc:
+        key_info = {"error": str(exc)}
+        step("key", f"抠图重测跳过：{exc}")
+
+    # 1.3) 清理多边形：影子/阴影会把一条直边切成两段，合并掉近共线的假顶点
     clean = clean_pieces(pieces_json)
     if clean.get("merged"):
         detail = "、".join(f"{m['piece']} {m['from']}→{m['to']}" for m in clean["merged"])
@@ -828,11 +849,13 @@ def solve(
     info: dict = {}
     if solution:
         try:
-            rendered = render_assembled(image_path, scaled_json, best_union, assembled,
-                                        names=names, labels_out=assembled_labels,
-                                        edge_starts=starts, info=info,
-                                        solution=solution,
-                                        fg_mask_path=out / "01_mask.png")
+            rendered = render_assembled(
+                keyed_img if keyed_img.exists() else image_path,
+                scaled_json, best_union, assembled,
+                names=names, labels_out=assembled_labels,
+                edge_starts=starts, info=info,
+                solution=solution,
+                fg_mask_path=alpha_png if alpha_png.exists() else out / "01_mask.png")
         except Exception as exc:                      # 渲染失败退回排名图
             metrics["render_error"] = str(exc)
     if not rendered:
@@ -852,6 +875,7 @@ def solve(
         "joints": info.get("joints", []),
         "ranking": ranking,
         "clean": clean,
+        "keying": key_info,
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }

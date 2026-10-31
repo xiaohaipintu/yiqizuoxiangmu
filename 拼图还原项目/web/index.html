@@ -463,7 +463,8 @@
     $('link-log').href = base + 'run.log';
     paintImages();
     paintLabelTable(result.labels || []);
-    paintJoints(result.joints || [], result.labels || [], result.ranking || {}, result.clean || {});
+    paintJoints(result.joints || [], result.labels || [], result.ranking || {},
+                result.clean || {}, result.keying || {});
 
     var m = result.metrics || {};
     $('m-pieces').textContent = result.pieces;
@@ -505,7 +506,7 @@
     }).join('');
   }
 
-  function paintJoints(joints, labels, ranking, clean) {
+  function paintJoints(joints, labels, ranking, clean, keying) {
     var box = $('joints-table');
     var head = '';
     if (ranking && ranking.chosen) {
@@ -522,7 +523,17 @@
         '已合并共线顶点（影子/毛刺造成的假角）：' +
         clean.merged.map(function (m) { return m.piece + ' ' + m.from + '→' + m.to; }).join('、') +
         '</p>';
-    }    if (!joints.length) {
+    }
+    if (keying && keying.changes && keying.changes.length) {
+      var changed = keying.changes.filter(function (c) { return c.vertices.split('→')[0] !== c.vertices.split('→')[1]; });
+      if (changed.length) {
+        head += '<p class="label" style="width:100%;margin:0 0 6px;">' +
+          '绿幕抠图重测（色度键控 + 亚像素边界）：' +
+          changed.map(function (c) { return c.piece + ' ' + c.vertices; }).join('、') +
+          '</p>';
+      }
+    }
+    if (!joints.length) {
       box.innerHTML = head + '<p class="label">没检测到贴合的边对（搜索失败或碎片被遮挡时会出现）。</p>';
       return;
     }
