@@ -463,7 +463,7 @@
     $('link-log').href = base + 'run.log';
     paintImages();
     paintLabelTable(result.labels || []);
-    paintJoints(result.joints || [], result.labels || [], result.ranking || {});
+    paintJoints(result.joints || [], result.labels || [], result.ranking || {}, result.clean || {});
 
     var m = result.metrics || {};
     $('m-pieces').textContent = result.pieces;
@@ -505,7 +505,7 @@
     }).join('');
   }
 
-  function paintJoints(joints, labels, ranking) {
+  function paintJoints(joints, labels, ranking, clean) {
     var box = $('joints-table');
     var head = '';
     if (ranking && ranking.chosen) {
@@ -517,7 +517,12 @@
         (ranking.attempts > 1 ? '（自动加时，共搜了 ' + ranking.attempts + ' 次）' : '') +
         '</p>';
     }
-    if (!joints.length) {
+    if (clean && clean.merged && clean.merged.length) {
+      head += '<p class="label" style="width:100%;margin:0 0 6px;">' +
+        '已合并共线顶点（影子/毛刺造成的假角）：' +
+        clean.merged.map(function (m) { return m.piece + ' ' + m.from + '→' + m.to; }).join('、') +
+        '</p>';
+    }    if (!joints.length) {
       box.innerHTML = head + '<p class="label">没检测到贴合的边对（搜索失败或碎片被遮挡时会出现）。</p>';
       return;
     }

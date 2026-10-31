@@ -261,8 +261,98 @@ def eval_metrics(polys: list) -> dict:
         return {}
 
 
-GOOD_LEN_DIFF = 4.0          # 对接边长差 ≤4% 认为拼对了
-GOOD_PAIRS_RATIO = 1.0       # 贴合对数至少要 n-1（串成一串）
+# --------------------------------------------------------------------------
+# 清理多边形：影子 / 阴影会把一条直边切成两段，合并近共线的假顶点
+# --------------------------------------------------------------------------
+CLEAN_ANGLE_TOL = 12.0       # 内角与 180° 差 <12° 就当成同一条直线（实测假顶点 170°）
+
+
+def _interior_angle(a, b, c) -> float:
+    """顶点 b 处的内角（度）。直边=180°，直角=90°。"""
+    v1, v2 = np.asarray(a, float) - np.asarray(b, float), np.asarray(c, float) - np.asarray(b, float)
+    n1, n2 = float(np.linalg.norm(v1)), float(np.linalg.norm(v2))
+    if n1 < 1e-9 or n2 < 1e-9:
+        return 180.0
+    return math.degrees(math.acos(float(np.clip(v1 @ v2 / (n1 * n2), -1.0, 1.0))))
+
+
+def simplify_polygon(poly, tol: float = CLEAN_ANGLE_TOL) -> np.ndarray:
+    """去掉「几乎是直线」的顶点（影子、毛刺、抗锯齿造成的假角）。"""
+    pts = [np.asarray(p, dtype=np.float64) for p in poly]
+    for _ in range(8):
+        n = len(pts)
+        if n <= 3:
+            break
+        keep = []
+        for k in range(n):
+            ang = _interior_angle(pts[k - 1], pts[k], pts[(k + 1) % n])
+            keep.append(abs(180.0 - ang) >= tol)
+        if all(keep):
+            break
+        pts = [p for p, kp in zip(pts, keep) if kp]
+        if not pts:
+            break
+    return np.asarray(pts, dtype=np.float64)
+
+
+def _rebuild_piece(piece: dict, poly: np.ndarray) -> dict:
+    """按简化后的多边形重算面积/质心/边表（字段名对齐 segment.py 的输出）。"""
+    n = len(poly)
+    edges = []
+    for k in range(n):
+        a = poly[k]
+        b = poly[(k + 1) % n]
+        d = b - a
+        edges.append({
+            "index": k,
+            "a": [float(a[0]), float(a[1])],
+            "b": [float(b[0]), float(b[1])],
+            "length": float(np.linalg.norm(d)),
+            "angle": float(math.degrees(math.atan2(float(d[1]), float(d[0])))),
+            "mid": [float((a[0] + b[0]) / 2), float((a[1] + b[1]) / 2)],
+        })
+    angles = [
+        _interior_angle(poly[k - 1], poly[k], poly[(k + 1) % n]) for k in range(n)
+    ]
+    perimeter = float(sum(e["length"] for e in edges))
+    piece = dict(piece)
+    piece["polygon"] = [[float(x), float(y)] for x, y in poly]
+    piece["edges"] = edges
+    piece["interior_angles"] = angles
+    piece["area"] = abs(float(cv2.contourArea(poly.astype(np.float32))))
+    piece["centroid"] = [float(poly[:, 0].mean()), float(poly[:, 1].mean())]
+    piece["perimeter"] = perimeter
+    piece["bbox"] = [float(poly[:, 0].min()), float(poly[:, 1].min()),
+                     float(poly[:, 0].max()), float(poly[:, 1].max())]
+    piece.pop("edge_fits", None)      # 边表变了，旧的拟合信息作废
+    return piece
+
+
+def clean_pieces(pieces_json: Path, tol: float = CLEAN_ANGLE_TOL) -> dict:
+    """把 pieces.json 里的多边形做共线合并，原地写回。返回统计。"""
+    try:
+        doc = json.loads(Path(pieces_json).read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"error": str(exc)}
+    before = after = 0
+    changed = []
+    for i, piece in enumerate(doc.get("pieces", [])):
+        poly = np.asarray(piece.get("polygon") or [], dtype=np.float64)
+        if len(poly) < 4:
+            continue
+        before += len(poly)
+        simple = simplify_polygon(poly, tol)
+        after += len(simple)
+        if len(simple) < len(poly):
+            changed.append({"piece": piece_name(i), "from": len(poly), "to": len(simple)})
+            doc["pieces"][i] = _rebuild_piece(piece, simple)
+    if changed:
+        Path(pieces_json).write_text(
+            json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"vertices_before": before, "vertices_after": after, "merged": changed}
+
+
+GOOD_LEN_DIFF = 4.0          # 对接边长差 ≤4% 认为拼对了GOOD_PAIRS_RATIO = 1.0       # 贴合对数至少要 n-1（串成一串）
 
 
 def beam_plan(n_pieces: int, total_edges: int) -> list:
@@ -600,6 +690,15 @@ def solve(
     pieces_json = out / "pieces.json"
     if not pieces_json.exists():
         raise RuntimeError("分割失败：没有生成 pieces.json")
+
+    # 1.2) 清理多边形：影子/阴影会把一条直边切成两段，合并掉近共线的假顶点
+    clean = clean_pieces(pieces_json)
+    if clean.get("merged"):
+        detail = "、".join(f"{m['piece']} {m['from']}→{m['to']}" for m in clean["merged"])
+        step("clean", f"合并共线顶点：{detail}")
+    else:
+        step("clean", "共线检查通过，无需合并")
+
     n_pieces = len(json.loads(pieces_json.read_text(encoding="utf-8")).get("pieces", []))
     if n_pieces < 2:
         raise RuntimeError(f"只找到 {n_pieces} 块碎片，照片里可能没有可区分的碎片")
@@ -752,6 +851,7 @@ def solve(
         "labels": labels,
         "joints": info.get("joints", []),
         "ranking": ranking,
+        "clean": clean,
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }
