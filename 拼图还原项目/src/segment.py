@@ -95,6 +95,66 @@ def chroma_alpha(bgr: np.ndarray, bg: np.ndarray, lo: float = 10.0, hi: float = 
     return (np.clip(a, 0.0, 1.0) * 255).astype(np.uint8)
 
 
+def _hue_dist(H: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """像素色相到区间 [lo, hi] 的环形距离（区间可跨 0，如 155~5）。"""
+    if lo <= hi:
+        inside = (H >= lo) & (H <= hi)
+    else:
+        inside = (H >= lo) | (H <= hi)
+    d_lo = np.minimum(np.abs(H - lo), 180.0 - np.abs(H - lo))
+    d_hi = np.minimum(np.abs(H - hi), 180.0 - np.abs(H - hi))
+    return np.where(inside, 0.0, np.minimum(d_lo, d_hi))
+
+
+def hue_alpha(bgr: np.ndarray, hue_lo: float = 145.0, hue_hi: float = 175.0,
+              sat_min: float = 60.0, val_min: float = 40.0) -> np.ndarray:
+    """只保留指定色相带（可跨 0）的软边蒙版。
+
+    色相落在 [hue_lo, hue_hi] 内且饱和度/亮度够高才算前景；边界处按色相偏离、
+    饱和度、亮度三个因素平滑过渡，避免硬边。
+
+    为什么要这个模式：色度抠像会把「所有不是绿的」都留下（反光、阴影、桌面、
+    白纸边），而实际只要留着有颜色的纸片。
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    H = hsv[..., 0].astype(np.float32)
+    S = hsv[..., 1].astype(np.float32)
+    V = hsv[..., 2].astype(np.float32)
+    dist = _hue_dist(H, float(hue_lo), float(hue_hi))
+    a_hue = np.clip(1.0 - dist / 6.0, 0.0, 1.0)      # 偏离目标色相 6 个 bin 以上就不要
+    a_sat = np.clip((S - sat_min) / 30.0, 0.0, 1.0)
+    a_val = np.clip((V - val_min) / 30.0, 0.0, 1.0)
+    return (np.clip(a_hue * a_sat * a_val, 0.0, 1.0) * 255).astype(np.uint8)
+
+
+def dominant_foreground_hue(bgr: np.ndarray, bg: np.ndarray, width: int = 30,
+                            sat_min: float = 60.0, val_min: float = 40.0,
+                            min_coverage: float = 0.85):
+    """找出前景（非背景色）最集中的色相带，返回 (覆盖率, lo, hi)。
+
+    典型用法：绿幕背景 + 只有一种颜色的纸片 → 覆盖率高 → 可以直接「只保留该色相」，
+    比"非绿即前景"干净得多（反光、阴影、桌面都会被切掉）。
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    H = hsv[..., 0].astype(np.int16)
+    S = hsv[..., 1].astype(np.int16)
+    V = hsv[..., 2].astype(np.int16)
+    bg_h = float(cv2.cvtColor(bg.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0, 0][0])
+    d = np.minimum(np.abs(H - bg_h), 180.0 - np.abs(H - bg_h))
+    fg = (d > 10) & (S >= sat_min) & (V >= val_min)
+    n_fg = int(fg.sum())
+    if n_fg < 500:
+        return 0.0, None, None
+    hist = np.bincount(H[fg].ravel(), minlength=180).astype(np.float64)
+    best_cov, best_start = 0.0, 0
+    for start in range(180):
+        idx = (np.arange(start, start + width)) % 180
+        cov = float(hist[idx].sum()) / n_fg
+        if cov > best_cov:
+            best_cov, best_start = cov, start
+    return best_cov, best_start % 180, (best_start + width) % 180
+
+
 def despill(bgr: np.ndarray, strength: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
     """压掉绿色溢出（despill）。
 
@@ -312,9 +372,13 @@ def main() -> int:
     ap.add_argument("--image", default="input/pieces.jpg")
     ap.add_argument("--out", default="out")
     ap.add_argument("--min-area", type=float, default=1500.0)
-    ap.add_argument("--mode", choices=("auto", "red", "chroma"), default="auto",
-                    help="auto=自动识别（绿幕走色度抠像）/ red=红色纸张 / chroma=强制绿幕抠像")
+    ap.add_argument("--mode", choices=("auto", "red", "chroma", "pink"), default="auto",
+                    help="auto=自动识别（绿幕走色度抠像）/ red=红色纸张 / chroma=强制绿幕抠像 / pink=只保留粉色区域")
     ap.add_argument("--delta-e", type=float, default=40.0)
+    ap.add_argument("--pink-hue-lo", type=float, default=145.0, help="粉色色相下限（OpenCV 0~180）")
+    ap.add_argument("--pink-hue-hi", type=float, default=175.0, help="粉色色相上限（OpenCV 0~180）")
+    ap.add_argument("--pink-sat-min", type=float, default=60.0, help="最低饱和度")
+    ap.add_argument("--pink-val-min", type=float, default=40.0, help="最低亮度")
     ap.add_argument("--chroma-lo", type=float, default=10.0,
                     help="色度软边下限（alpha 开始大于 0）")
     ap.add_argument("--chroma-hi", type=float, default=22.0,
@@ -333,21 +397,43 @@ def main() -> int:
     print(f"图像尺寸: {bgr.shape[1]}x{bgr.shape[0]}")
 
     use_chroma = False
+    use_hue = False
+    hue_band = None
+    hue_a = None
     delta = None
     bg = None
     if args.mode in ("auto", "chroma"):
         delta, bg = background_delta(bgr)
         print("背景色 BGR %s" % bg.tolist())
-        if args.mode == "chroma":
-            use_chroma = True
-        else:
-            use_chroma = is_green_screen(bg)
+        use_chroma = args.mode == "chroma" or is_green_screen(bg)
         print("抠像方式：" + (
             "绿幕色度抠像（只用 Lab 的 a/b，忽略亮度 → 阴影/光照不均不会误判为前景）"
             if use_chroma else "Lab 全量 ΔE（背景不是绿幕）"))
+        # 绿幕 + 画面里只有一种颜色的纸片时，进一步收窄成「只保留这个色相」：
+        # 色度抠像会把反光、阴影、桌面、白纸边全留下，色相带能把这些都切掉。
+        if use_chroma and args.mode == "auto":
+            cov, lo, hi = dominant_foreground_hue(bgr, bg)
+            if lo is not None and cov >= 0.85:
+                use_hue, hue_band = True, (float(lo), float(hi))
+                print("检测到主体色相带 H %d~%d（覆盖前景 %.1f%%）→ 只保留该色相区域"
+                      % (lo, hi, cov * 100))
+
+    if args.mode == "pink":
+        use_hue, hue_band = True, (args.pink_hue_lo, args.pink_hue_hi)
+        print("抠像方式：只保留粉色区域（H %.0f~%.0f，S>=%.0f，V>=%.0f）"
+              % (args.pink_hue_lo, args.pink_hue_hi, args.pink_sat_min, args.pink_val_min))
+
+    if use_hue:
+        hue_a = hue_alpha(bgr, hue_band[0], hue_band[1],
+                          args.pink_sat_min, args.pink_val_min)
+        print("           该色相像素占画面 %.2f%%" % (100.0 * (hue_a > 127).mean()))
 
     if args.mode == "red":
         mask = red_mask(bgr)
+    elif use_hue:
+        mask = (hue_a > 127).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
     elif use_chroma:
         cdist = chroma_delta(bgr, bg)
         mask = (cdist > args.chroma_hi).astype(np.uint8) * 255
@@ -359,7 +445,11 @@ def main() -> int:
     cv2.imwrite(str(outdir / "01_mask_raw.png"), mask)
     # 剔掉背景上的小污点/纸屑：它们本就不算碎片，但会画在掩膜上，看起来就是“没抠干净”
     mask, n_specks, speck_area = drop_specks(mask, args.min_area)
-    if use_chroma:
+    if use_hue:
+        # 用清理后的掩膜约束一下，避免杂点处冒出半透明
+        allowed = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+        alpha = np.where(allowed, hue_a, 0).astype(np.uint8)
+    elif use_chroma:
         alpha = chroma_alpha(bgr, bg, args.chroma_lo, args.chroma_hi, mask)
     else:
         alpha = soft_alpha(mask, delta)
