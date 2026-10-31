@@ -600,6 +600,7 @@ def main(argv=None):
             "source_vertices": len(p["polygon"]),
             "kept_vertex_indices": idx,
             "verts": verts,
+            "source_polygon": [[float(x), float(y)] for x, y in p["polygon"]],
             "corners": triangle_corners(verts),
         })
 
@@ -668,6 +669,9 @@ def main(argv=None):
                 "within_tol": pc["within_tol"],
             }
         tri["placed"] = placed
+        # 下游渲染要拿「碎片原始多边形」跟「摆放后多边形」做顶点对拟合；
+        # placed 只有还原后的 3 个真角，顶点数对不上，所以另外存一份整块多边形。
+        tri["placed_full"] = apply_similarity(tri["source_polygon"], w, t_)
         placed_all.append(placed)
         matches.append({
             "triangle_label": tri["label"],
@@ -729,6 +733,9 @@ def main(argv=None):
             "source_vertices": t["source_vertices"],
             "kept_vertex_indices": t["kept_vertex_indices"],
             "vertices": t["verts"],
+            # 摆放后的多边形（已按双射结果缩放进对应缺口），供下游渲染直接使用
+            "placed": t.get("placed"),
+            "placed_polygon": t.get("placed_full"),
             "corners": [{k: c[k] for k in ("corner", "side_in", "side_out", "ratio", "angle_deg")}
                         for c in t["corners"]],
         } for t in triangles],

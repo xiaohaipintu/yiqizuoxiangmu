@@ -469,6 +469,107 @@ def _run(script: str, args: list, timeout: float, log, steps: dict | None = None
     return proc
 
 
+def _run_soft(script: str, args: list, timeout: float,
+              logs_dir: Path | None = None) -> subprocess.CompletedProcess | None:
+    """跑一个「可选」步骤：失败只记日志，不中断整条流水线。"""
+    cmd = [sys.executable, str(SRC_DIR / script)] + [str(a) for a in args]
+    started = time.time()
+    try:
+        proc = subprocess.run(cmd, cwd=str(PROJ_DIR), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout,
+                              env=child_env())
+    except Exception:
+        return None
+    try:
+        if logs_dir is not None:
+            write_step_log(logs_dir, script, cmd, proc, time.time() - started)
+    except Exception:
+        pass
+    return proc
+
+
+# --------------------------------------------------------------------------
+# 先验约束：1 个凹形 + 3 个三角形，每个三角形只能对应一个缺口（双射）
+# --------------------------------------------------------------------------
+def _reflex_count(poly) -> int:
+    n = len(poly)
+    sa = 0.0
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        sa += x1 * y2 - x2 * y1
+    sign = 1.0 if sa > 0 else -1.0
+    c = 0
+    for i in range(n):
+        o, a, b = poly[(i - 1) % n], poly[i], poly[(i + 1) % n]
+        cross = (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+        if cross * sign < 0:
+            c += 1
+    return c
+
+
+def notch_applicable(pieces_json: Path) -> tuple[bool, dict]:
+    """碎片集合是否满足「1 个凹形(3 凹顶点) + 恰好 3 个三角形」。"""
+    try:
+        doc = json.loads(Path(pieces_json).read_text(encoding="utf-8"))
+    except Exception:
+        return False, {}
+    pieces = doc.get("pieces") or []
+    concave = [(p, _reflex_count(p["polygon"])) for p in pieces]
+    concave = [(p, k) for p, k in concave if k > 0]
+    convex = [p for p in pieces if _reflex_count(p["polygon"]) == 0]
+    if len(concave) != 1:
+        return False, {}
+    cp, k = concave[0]
+    if k != 3 or len(convex) != 3:
+        return False, {}
+    return True, {"concave": cp, "triangles": convex}
+
+
+def notch_solution_from(out: Path, scaled_json: Path) -> tuple[dict | None, dict]:
+    """把双射匹配结果转成流水线通用的 {placed, polys} 解。"""
+    f = out / "notch_ratio_match.json"
+    if not f.exists():
+        return None, {}
+    try:
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        scaled = json.loads(Path(scaled_json).read_text(encoding="utf-8"))
+    except Exception:
+        return None, {}
+    by_label = {int(p["label"]): p for p in scaled.get("pieces", [])}
+    cp = by_label.get(int(doc.get("concave_piece", {}).get("label", -1)))
+    if cp is None:
+        return None, {}
+    polys = [[[float(x), float(y)] for x, y in cp["polygon"]]]
+    placed = [[int(cp["id"]), 0.0, 0.0, 0.0]]
+    for t in doc.get("triangles") or []:
+        p = by_label.get(int(t["label"]))
+        poly = t.get("placed_polygon") or t.get("placed")
+        if p is None or not poly:
+            return None, {}
+        polys.append([[*map(float, q)] for q in poly])
+        placed.append([int(p["id"]), 0.0, 0.0, 0.0])
+    return {"placed": placed, "polys": polys}, doc
+
+
+def notch_ok(doc: dict, max_overlap: float = 1.0, max_mean_err: float = 0.15) -> tuple[bool, str]:
+    """双射解能不能直接用：必须一一对应、贴得够准、没有明显穿透。"""
+    if not doc.get("bijection_ok"):
+        return False, "双射校验未通过"
+    ms = doc.get("matches") or []
+    if not ms:
+        return False, "没有匹配结果"
+    errs = [float(m.get("shape_err", 1.0)) for m in ms]
+    mean_err = sum(errs) / len(errs)
+    overlap = float((doc.get("coverage") or {}).get("overlap_pct", 100.0))
+    gap = float((doc.get("coverage") or {}).get("gap_pct", 100.0))
+    if overlap > max_overlap:
+        return False, f"重叠 {overlap:.2f}% > {max_overlap}%"
+    if mean_err > max_mean_err:
+        return False, f"平均形状误差 {mean_err:.3f} > {max_mean_err}"
+    return True, f"平均形状误差 {mean_err:.3f}，重叠 {overlap:.2f}%，缺口 {gap:.2f}%"
+
+
 # --------------------------------------------------------------------------
 # 成品图渲染：用真实像素 + 解出的刚体位姿把每块贴回原照片
 # --------------------------------------------------------------------------
@@ -785,39 +886,65 @@ def solve(
          ["--pieces", pieces_json, "--out", scaled_json], timeout=120, log=step, steps=steps,
          logs_dir=logs)
 
-    # 3) 束搜索拼合 —— 时间预算自动决定，拼得不满意就自己加时重搜
-    total_edges = sum(len(p.get("edges") or []) for p in piece_list)
-    plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
+    # 3) 先验优先：1 个凹形 + 3 个三角形 → 每个三角形只能对应一个缺口（双射）。
+    #    满足且结果达标就直接采用，省掉几十秒束搜索；不满足/不达标再退回束搜索。
     sol_json = out / "beam_solutions.json"
     beam_runs: list[dict] = []
     pick = None
     n_sol = 0
-    for i, budget in enumerate(plan):
-        step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
-        _run("beam_search.py",
-             ["--pieces", scaled_json, "--out", out,
-              "--beam", "300", "--time", str(float(budget))],
-             timeout=budget + 240, log=step, steps=steps,
-             logs_dir=logs)
-        if not sol_json.exists():
-            raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
-        n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
-        if not n_sol:
-            continue
-        pick = rerank_solutions(sol_json, names, starts)
-        beam_runs.append({"budget": budget, "solutions": n_sol,
-                          "len_diff": pick["diff"] if pick else None,
-                          "pairs": pick["pairs"] if pick else 0})
-        if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
-            break
-    if not n_sol:
-        raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
+    notch_sol = None
+    notch_doc: dict = {}
+    applicable, _prior = notch_applicable(pieces_json)
+    if applicable:
+        step("notch", "1 凹形 + 3 三角形：按比例双射匹配 3 个缺口…")
+        _run_soft("notch_ratio_match.py",
+                  ["--pieces", scaled_json, "--out", out, "--match-mode", "shape"],
+                  timeout=180, logs_dir=logs)
+        notch_sol, notch_doc = notch_solution_from(out, scaled_json)
+        if notch_sol is None:
+            step("notch", "双射匹配没产出可用结果，退回束搜索")
+        else:
+            ok, why = notch_ok(notch_doc)
+            if ok:
+                n_sol = 1
+                step("notch", f"采用双射匹配（{why}）")
+            else:
+                step("notch", f"双射匹配不达标（{why}），退回束搜索")
+                notch_sol = None
+    else:
+        step("notch", "碎片构成不是「1 凹形 + 3 三角形」，跳过双射匹配")
 
-    # 4) 并集评估
-    step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
-    _run("eval_union.py",
-         ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step, steps=steps,
-         logs_dir=logs)
+    # 4) 束搜索拼合 —— 双射已成功时跳过（时间预算自动决定，不满意自己加时重搜）
+    if notch_sol is None:
+        total_edges = sum(len(p.get("edges") or []) for p in piece_list)
+        plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
+        for i, budget in enumerate(plan):
+            step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
+            _run("beam_search.py",
+                 ["--pieces", scaled_json, "--out", out,
+                  "--beam", "300", "--time", str(float(budget))],
+                 timeout=budget + 240, log=step, steps=steps,
+                 logs_dir=logs)
+            if not sol_json.exists():
+                raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
+            n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
+            if not n_sol:
+                continue
+            pick = rerank_solutions(sol_json, names, starts)
+            beam_runs.append({"budget": budget, "solutions": n_sol,
+                              "len_diff": pick["diff"] if pick else None,
+                              "pairs": pick["pairs"] if pick else 0})
+            if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
+                break
+        if not n_sol:
+            raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
+
+    # 5) 并集评估（束搜索才需要，双射解已经自带覆盖校验）
+    if notch_sol is None:
+        step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
+        _run("eval_union.py",
+             ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step, steps=steps,
+             logs_dir=logs)
 
     # 5) 渲染成品图
     step("render", "按位姿贴回真实像素…")
@@ -829,7 +956,22 @@ def solve(
     step("rerank", "按对接边长度一致度重排候选…")
     solution = None
     ranking: dict = {"beam_runs": beam_runs}
-    if pick:
+    if notch_sol is not None:
+        solution = notch_sol
+        ranking.update({
+            "chosen": "notch-bijection",
+            "notch_matches": [
+                {"triangle": m.get("triangle_label"), "notch": m.get("notch_index"),
+                 "shape_err": round(float(m.get("shape_err", 0.0)), 4)}
+                for m in (notch_doc.get("matches") or [])
+            ],
+            "notch_coverage": notch_doc.get("coverage"),
+        })
+        (out / "chosen_solution.json").write_text(
+            json.dumps({"ranking": ranking, **solution}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    elif pick:
         entry = pick["entry"]
         solution = {"placed": entry.get("placed"), "polys": entry.get("polys")}
         ranking.update({
