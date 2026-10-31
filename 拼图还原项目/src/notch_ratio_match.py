@@ -232,6 +232,92 @@ def exact_triangle_angle(verts, i):
     return angle_deg(verts[(i - 1) % n], verts[i], verts[(i + 1) % n])
 
 
+# --------------------------------------------------- 整体形状（三点比例）匹配
+def shape_signature(pts):
+    """三条边长归一化后升序 —— 尺度、旋转、顶点起点全都无关的形状指纹。
+
+    这是「按比例匹配」最完整的表达：不只看凹顶点一个角的两条邻边，
+    而是把三角形当成整体，用它三条边的比例去对缺口三角形的三条边。
+    """
+    n = len(pts)
+    lens = [dist(pts[i], pts[(i + 1) % n]) for i in range(n)]
+    total = sum(lens)
+    if total < 1e-12:
+        return [0.0, 0.0, 0.0]
+    return sorted(L / total for L in lens)
+
+
+def notch_triangle(notch):
+    """缺口本身就是一个三角形：两个壁端点 + 凹顶点（口子即 prev-next 弦）。"""
+    return [notch["prev"], notch["corner"], notch["next"]]
+
+
+def best_vertex_map(tri_verts, notch_verts):
+    """试遍 3! 种「碎片顶点 ↔ 缺口顶点」对应，取最小二乘残差最小的相似变换。
+
+    复数域最小二乘天然不含镜像，所以这里只是在 6 种旋转对应里挑最贴的一种，
+    不是放宽成镜像贴合。
+    """
+    best = None
+    for perm in itertools.permutations(range(len(notch_verts))):
+        dst = [notch_verts[k] for k in perm]
+        w, t = similarity_fit(tri_verts, dst)
+        rms = similarity_rms(tri_verts, dst, w, t)
+        if best is None or rms < best[0]:
+            best = (rms, perm, w, t)
+    return best
+
+
+def pair_cost_shape(tri_verts, notch, tol_shape):
+    """(三角形, 缺口) 的整形状代价：三条边归一化比例签名的 L1 距离。"""
+    sig_t = shape_signature(tri_verts)
+    sig_n = shape_signature(notch_triangle(notch))
+    shape_err = sum(abs(a - b) for a, b in zip(sig_t, sig_n))
+    return {
+        "cost": shape_err,
+        "shape_err": shape_err,
+        "sig_tri": sig_t,
+        "sig_notch": sig_n,
+        "within_tol": shape_err <= tol_shape,
+    }
+
+
+def solve_assignment_shape(triangles, notches, tol_shape, top_k=3):
+    """整形状模式下的双射求解：穷举 三角形→缺口 的全排列。"""
+    n = len(triangles)
+    if n != len(notches):
+        raise SystemExit(
+            f"数量不匹配：{n} 个三角形 vs {len(notches)} 个缺口——"
+            "「每个三角形只对应一个缺口」要求两者数量相等。"
+        )
+    table = {}
+    for ti, tri in enumerate(triangles):
+        for ni, notch in enumerate(notches):
+            table[(ti, ni)] = pair_cost_shape(tri["verts"], notch, tol_shape)
+
+    cands = []
+    for perm in itertools.permutations(range(len(notches)), n):
+        total = 0.0
+        worst = 0.0
+        within = 0
+        for ti in range(n):
+            pc = table[(ti, perm[ti])]
+            total += pc["cost"]
+            worst = max(worst, pc["cost"])
+            within += 1 if pc["within_tol"] else 0
+        cands.append({
+            "total": total,
+            "worst": worst,
+            "within": within,
+            "assign": {ti: perm[ti] for ti in range(n)},
+        })
+    cands.sort(key=lambda c: (-c["within"], c["total"], c["worst"]))
+    best = cands[0]
+    best["table"] = table
+    best["alternatives"] = cands[1:1 + top_k]
+    return best
+
+
 # --------------------------------------------------------------- 配对代价
 def pair_cost(notch, corner, tol_ratio, tol_deg):
     """单个 (缺口, 三角角) 的归一化代价。
@@ -485,6 +571,10 @@ def main(argv=None):
     ap.add_argument("--out", required=True, help="输出目录")
     ap.add_argument("--tol-ratio", type=float, default=0.15, help="比例相对容差，默认 0.15")
     ap.add_argument("--tol-deg", type=float, default=10.0, help="角度容差（度），默认 10")
+    ap.add_argument("--match-mode", choices=["shape", "corner"], default="shape",
+                    help="shape=整三角形三边比例签名匹配（默认）；corner=只看凹顶点两邻边+张角")
+    ap.add_argument("--tol-shape", type=float, default=0.08,
+                    help="整形状模式的三边比例 L1 容差，默认 0.08")
     args = ap.parse_args(argv)
 
     data = json.loads(pathlib.Path(args.pieces).read_text(encoding="utf-8"))
@@ -527,35 +617,66 @@ def main(argv=None):
         print(f"       label={t['label']} 原{ t['source_vertices']}顶点→真三角  {cs}")
 
     # 3) 双射求解
-    best = solve_assignment(triangles, notches, args.tol_ratio, args.tol_deg)
+    if args.match_mode == "shape":
+        best = solve_assignment_shape(triangles, notches, args.tol_shape)
+        print(f"\n[匹配模式] shape — 整三角形三边比例签名，容差 {args.tol_shape}")
+    else:
+        best = solve_assignment(triangles, notches, args.tol_ratio, args.tol_deg)
+        print(f"\n[匹配模式] corner — 凹顶点两邻边比 + 张角，容差 {args.tol_ratio}/{args.tol_deg}°")
 
     # 4) 放入并校验
     matches, placed_all = [], []
     for ti, tri in enumerate(triangles):
         ni = best["assign"][ti]
-        ci = best["corner_of"][ti]
         notch = notches[ni]
-        corner = tri["corners"][ci]
-        pc = pair_cost(notch, corner, args.tol_ratio, args.tol_deg)
-        placed, w, t_, rms = place_triangle(tri["verts"], ci, notch, pc["order"])
+        if args.match_mode == "shape":
+            nt = notch_triangle(notch)
+            # 三点最小二乘残差 = 三角形与缺口之间的真实形状差异（只报告，不用于摆放）
+            shape_rms, perm_map, _w_fit, _t_fit = best_vertex_map(tri["verts"], nt)
+            # perm_map[i] 是碎片第 i 个顶点对上的缺口顶点号（0=prev 1=corner 2=next）
+            ci = perm_map.index(1)
+            order = "forward" if perm_map[(ci - 1) % 3] == 0 else "swapped"
+            # 摆放仍用「角点钉在凹顶点」：形状本就有 6% 级差异，硬做三点拟合会
+            # 把三角形压进凹形实体（实测重叠 2.7%），钉角法是不重叠的最优让步。
+            placed, w, t_, rms = place_triangle(tri["verts"], ci, notch, order)
+            pc = pair_cost_shape(tri["verts"], notch, args.tol_shape)
+            extra = {
+                "triangle_corner": ci,
+                "edge_order": order,
+                "vertex_map": list(perm_map),
+                "shape_err": pc["shape_err"],
+                "shape_rms_px": shape_rms,
+                "sig_triangle": [round(x, 4) for x in pc["sig_tri"]],
+                "sig_notch": [round(x, 4) for x in pc["sig_notch"]],
+                "cost": pc["cost"],
+                "within_tol": pc["within_tol"],
+            }
+        else:
+            ci = best["corner_of"][ti]
+            corner = tri["corners"][ci]
+            pc = pair_cost(notch, corner, args.tol_ratio, args.tol_deg)
+            placed, w, t_, rms = place_triangle(tri["verts"], ci, notch, pc["order"])
+            extra = {
+                "triangle_corner": ci,
+                "edge_order": pc["order"],
+                "ratio_err": pc["ratio_err"],
+                "angle_err_deg": pc["angle_err_deg"],
+                "length_shape_err": pc["length_shape_err"],
+                "cost": pc["cost"],
+                "bad_ratio": pc["bad_ratio"],
+                "bad_angle": pc["bad_angle"],
+                "within_tol": pc["within_tol"],
+            }
         tri["placed"] = placed
         placed_all.append(placed)
         matches.append({
             "triangle_label": tri["label"],
             "notch_index": ni,
             "notch_vertex_index": notch["vertex_index"],
-            "triangle_corner": ci,
-            "edge_order": pc["order"],
             "scale": abs(w),
             "rotation_deg": math.degrees(math.atan2(w.imag, w.real)),
-            "ratio_err": pc["ratio_err"],
-            "angle_err_deg": pc["angle_err_deg"],
-            "length_shape_err": pc["length_shape_err"],
             "rms_px": rms,
-            "cost": pc["cost"],
-            "bad_ratio": pc["bad_ratio"],
-            "bad_angle": pc["bad_angle"],
-            "within_tol": pc["within_tol"],
+            **extra,
         })
 
     hull = convex_hull(piece_poly)
@@ -571,13 +692,21 @@ def main(argv=None):
     )
 
     print("\n[匹配结果] 三角形 → 缺口（双射）")
-    print(f"  {'三角':<8}{'缺口':>4}  {'缩放':>7}  {'旋转':>8}  {'比例误差':>9}  "
-          f"{'角度误差':>8}  {'RMS(px)':>8}  达标")
-    for m in matches:
-        print(f"  label{m['triangle_label']:<3}{m['notch_index']:>6}  {m['scale']:>7.3f}  "
-              f"{m['rotation_deg']:>7.1f}°  {m['ratio_err']:>9.4f}  "
-              f"{m['angle_err_deg']:>7.2f}°  {m['rms_px']:>8.2f}  "
-              f"{'是' if m['within_tol'] else '否'}")
+    if args.match_mode == "shape":
+        print(f"  {'三角':<8}{'缺口':>4}  {'缩放':>7}  {'旋转':>8}  {'形状误差':>9}  "
+              f"{'RMS(px)':>8}  达标")
+        for m in matches:
+            print(f"  label{m['triangle_label']:<3}{m['notch_index']:>6}  {m['scale']:>7.3f}  "
+                  f"{m['rotation_deg']:>7.1f}°  {m['shape_err']:>9.4f}  "
+                  f"{m['rms_px']:>8.2f}  {'是' if m['within_tol'] else '否'}")
+    else:
+        print(f"  {'三角':<8}{'缺口':>4}  {'缩放':>7}  {'旋转':>8}  {'比例误差':>9}  "
+              f"{'角度误差':>8}  {'RMS(px)':>8}  达标")
+        for m in matches:
+            print(f"  label{m['triangle_label']:<3}{m['notch_index']:>6}  {m['scale']:>7.3f}  "
+                  f"{m['rotation_deg']:>7.1f}°  {m['ratio_err']:>9.4f}  "
+                  f"{m['angle_err_deg']:>7.2f}°  {m['rms_px']:>8.2f}  "
+                  f"{'是' if m['within_tol'] else '否'}")
     print(f"\n[双射校验] 每三角形↔唯一缺口: {'通过' if bijection_ok else '失败'}"
           f"  未匹配缺口 {sorted(set(n['notch_index'] for n in notches) - set(used_notches)) or '无'}")
     print(f"[覆盖校验] 重叠 {coverage['overlap_pct']:.2f}%  "
@@ -590,7 +719,8 @@ def main(argv=None):
     result = {
         "source": args.pieces,
         "image": data.get("image"),
-        "tolerance": {"ratio": args.tol_ratio, "angle_deg": args.tol_deg},
+        "tolerance": {"match_mode": args.match_mode, "ratio": args.tol_ratio,
+                      "angle_deg": args.tol_deg, "shape": args.tol_shape},
         "concave_piece": {"label": concave["label"], "vertices": len(piece_poly)},
         "notches": [{k: v for k, v in n.items() if k not in ("prev", "next", "corner")}
                     | {"corner": n["corner"]} for n in notches],

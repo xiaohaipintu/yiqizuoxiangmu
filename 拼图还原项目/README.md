@@ -58,6 +58,7 @@ python src/angle_match.py --pieces out5/pieces_scaled.json --out out5 --tol-deg 
 | `equal_edges.py` | 等长边整条共线贴合 + 三块/多块闭环枚举 |
 | `angle_match.py` | 角度匹配：碎片"三角形化"（最大面积内接三角形）→ 凹形夹角 vs 三角形内角容差匹配 → 相似变换嵌入（无镜像）→ 穿透率过滤 → 渲染大图 |
 | `ratio_match.py` | 边长比例指纹匹配（仅适用于纯三角形小碎片） |
+| `notch_ratio_match.py` | **3 三角形 ↔ 3 缺口双射匹配**：缺口取凹顶点两邻边比+空腔张角，三角形先还原真 3 角；`--match-mode shape`（默认）用整三角形三边比例签名匹配，`corner` 只看单角；穷举全排列保证「每三角形只对应一个缺口」；摆放时角点钉在凹顶点，输出 json + svg |
 | `pairwise.py` | 两两碎片边配对 |
 | `match_census.py` | 边长度容差普查 |
 | `rescale_pieces.py` | 尺度补偿：sqrt(像素面积/多边形面积) 相似缩放 |
