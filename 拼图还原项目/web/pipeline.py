@@ -867,7 +867,11 @@ def solve(
     info: dict = {}
     if solution:
         try:
-            rendered = render_assembled(image_path, scaled_json, best_union, assembled,
+            # 绿幕反光会把背景绿染到纸片边缘：有 despill 版本就优先用它贴图
+            render_src = out / "01_despill.jpg"
+            if not render_src.exists():
+                render_src = image_path
+            rendered = render_assembled(render_src, scaled_json, best_union, assembled,
                                         names=names, labels_out=assembled_labels,
                                         edge_starts=starts, info=info,
                                         solution=solution,

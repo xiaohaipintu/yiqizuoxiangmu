@@ -7,6 +7,7 @@
     out/01_mask.png      前景掩膜（已剔除小于 --min-area 的杂点，背景干净）
     out/01_mask_raw.png  未清理的原始掩膜，仅排查用
     out/01_alpha.png     软边蒙版（0~255 渐变），贴图用它才不会带背景色包边
+    out/01_despill.jpg   压掉绿色溢出后的原图（成品贴图优先用它，避免纸片带绿罩）
     out/02_pieces.png    编号 + 边编号的调试图
     out/03_cutouts.png   逐块抠图预览（白底网格），用来肉眼检查抠得干不干净
 """
@@ -63,6 +64,48 @@ def auto_mask(bgr: np.ndarray, delta_e: float = 40.0) -> np.ndarray:
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
     return mask
+
+
+def is_green_screen(bg: np.ndarray) -> bool:
+    """背景是不是绿幕：HSV 色相落在绿色段且饱和度够高。"""
+    hsv = cv2.cvtColor(bg.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0, 0]
+    hue, sat, val = float(hsv[0]), float(hsv[1]), float(hsv[2])
+    return 40.0 <= hue <= 85.0 and sat >= 90.0 and val >= 40.0
+
+
+def chroma_delta(bgr: np.ndarray, bg: np.ndarray) -> np.ndarray:
+    """只用 Lab 的 a/b 色度通道算与背景的距离，**完全丢掉亮度 L**。
+
+    这是绿幕抠像比「全量 ΔE」强的地方：阴影、光照不均匀只会改变 L，
+    不会改变 a/b，所以影子不会被误判成前景（也就不会把直边切成两段）。
+    """
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    bgl = cv2.cvtColor(bg.reshape(1, 1, 3), cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+    return np.linalg.norm(lab[..., 1:] - bgl[1:], axis=2)
+
+
+def chroma_alpha(bgr: np.ndarray, bg: np.ndarray, lo: float = 10.0, hi: float = 22.0,
+                 mask: np.ndarray | None = None) -> np.ndarray:
+    """绿幕软边 alpha：色度差在 lo~hi 之间线性过渡，同步处理半透边缘。"""
+    d = chroma_delta(bgr, bg)
+    a = np.clip((d - lo) / max(1e-6, hi - lo), 0.0, 1.0)
+    if mask is not None:
+        allowed = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+        a = np.where(allowed, a, 0.0)
+    return (np.clip(a, 0.0, 1.0) * 255).astype(np.uint8)
+
+
+def despill(bgr: np.ndarray, strength: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """压掉绿色溢出（despill）。
+
+    绿幕反光会在纸片边缘染一层绿（G 明显高于 R/B）。经典做法：把 G 压到不超过
+    max(R, B)，其余通道不动 —— 颜色更正，又不会破坏亮度结构。
+    """
+    out = bgr.astype(np.float32)
+    green = out[..., 1]
+    excess = np.clip(green - np.maximum(out[..., 0], out[..., 2]), 0.0, None) * strength
+    out[..., 1] = green - excess
+    return np.clip(out, 0, 255).astype(np.uint8), excess
 
 
 def drop_specks(mask: np.ndarray, min_area: float) -> tuple[np.ndarray, int, int]:
@@ -269,8 +312,13 @@ def main() -> int:
     ap.add_argument("--image", default="input/pieces.jpg")
     ap.add_argument("--out", default="out")
     ap.add_argument("--min-area", type=float, default=1500.0)
-    ap.add_argument("--mode", choices=("auto", "red"), default="auto")
+    ap.add_argument("--mode", choices=("auto", "red", "chroma"), default="auto",
+                    help="auto=自动识别（绿幕走色度抠像）/ red=红色纸张 / chroma=强制绿幕抠像")
     ap.add_argument("--delta-e", type=float, default=40.0)
+    ap.add_argument("--chroma-lo", type=float, default=10.0,
+                    help="色度软边下限（alpha 开始大于 0）")
+    ap.add_argument("--chroma-hi", type=float, default=22.0,
+                    help="色度软边上限（alpha 到达 255）")
     ap.add_argument("--concave", action="store_true",
                     help="碎片本身是凹多边形（有凹槽），沿真实轮廓拟合而不是凸包")
     args = ap.parse_args()
@@ -284,17 +332,50 @@ def main() -> int:
         return 1
     print(f"图像尺寸: {bgr.shape[1]}x{bgr.shape[0]}")
 
-    mask = red_mask(bgr) if args.mode == "red" else auto_mask(bgr, args.delta_e)
+    use_chroma = False
     delta = None
-    if args.mode == "auto":
+    bg = None
+    if args.mode in ("auto", "chroma"):
         delta, bg = background_delta(bgr)
         print("背景色 BGR %s" % bg.tolist())
+        if args.mode == "chroma":
+            use_chroma = True
+        else:
+            use_chroma = is_green_screen(bg)
+        print("抠像方式：" + (
+            "绿幕色度抠像（只用 Lab 的 a/b，忽略亮度 → 阴影/光照不均不会误判为前景）"
+            if use_chroma else "Lab 全量 ΔE（背景不是绿幕）"))
+
+    if args.mode == "red":
+        mask = red_mask(bgr)
+    elif use_chroma:
+        cdist = chroma_delta(bgr, bg)
+        mask = (cdist > args.chroma_hi).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+    else:
+        mask = auto_mask(bgr, args.delta_e)
+
     cv2.imwrite(str(outdir / "01_mask_raw.png"), mask)
     # 剔掉背景上的小污点/纸屑：它们本就不算碎片，但会画在掩膜上，看起来就是“没抠干净”
     mask, n_specks, speck_area = drop_specks(mask, args.min_area)
-    alpha = soft_alpha(mask, delta)
+    if use_chroma:
+        alpha = chroma_alpha(bgr, bg, args.chroma_lo, args.chroma_hi, mask)
+    else:
+        alpha = soft_alpha(mask, delta)
     cv2.imwrite(str(outdir / "01_mask.png"), mask)
     cv2.imwrite(str(outdir / "01_alpha.png"), alpha)
+
+    # despill：绿幕反光会把背景绿打到纸片边缘，压掉 G 溢出，成品才不会带绿罩
+    despilled, spill = despill(bgr)
+    # 只在有前景的地方改色：背景本来 G 就最高，全域压下去会让整张图发灰
+    keep = cv2.dilate(alpha, np.ones((3, 3), np.uint8)) > 0
+    despilled = np.where(keep[..., None], despilled, bgr).astype(np.uint8)
+    n_spill = int(((spill > 10) & keep).sum())
+    if n_spill:
+        cv2.imwrite(str(outdir / "01_despill.jpg"), despilled)
+        print("despill：压掉绿色溢出的前景像素 %d px（最大溢出 %.0f）"
+              % (n_spill, float(spill[keep].max()) if keep.any() else 0.0))
 
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     pieces = []
@@ -346,7 +427,7 @@ def main() -> int:
             cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
             cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     cv2.imwrite(str(outdir / "02_pieces.png"), vis)
-    render_cutouts(bgr, alpha, pieces, outdir / "03_cutouts.png")
+    render_cutouts(despilled, alpha, pieces, outdir / "03_cutouts.png")
 
     with open(outdir / "pieces.json", "w", encoding="utf-8") as f:
         json.dump({"image": args.image, "pieces": pieces}, f, ensure_ascii=False, indent=2)

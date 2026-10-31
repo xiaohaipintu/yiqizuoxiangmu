@@ -48,7 +48,7 @@ python src/angle_match.py --pieces out5/pieces_scaled.json --out out5 --tol-deg 
 
 | 模块 | 作用 |
 | --- | --- |
-| `segment.py` | 抠碎片：Lab 色差取四边背景色（默认 ΔE=40），直线最小二乘拟合求交精修角点，`--concave` 沿真实轮廓拟合凹槽，面积偏差 ≤6% 校验 |
+| `segment.py` | 抠碎片：Lab 色差取四边背景色（默认 ΔE=40），直线最小二乘拟合求交精修角点，`--concave` 沿真实轮廓拟合凹槽，面积偏差 ≤6% 校验。**绿色背景（绿幕）自动走「色度抠像」**：只用 Lab 的 a/b 通道、丢掉亮度 L，阴影/光照不均不会误判为前景；配合 `despill` 压掉纸片边缘的绿色溢出（实测前景溢出 >40 的像素 101415 → 0），并输出 `01_alpha.png` 软边蒙版与 `03_cutouts.png` 逐块抠图预览 |
 | `geometry.py` | 几何原语：面积 / 边长 / 内角 / 多边形交叠 / 凸包等 |
 | `assemble.py` | 拼接内核：Piece / world / place_edge 等拼接原语 |
 | `solve.py` | 最优优先（Best-first）拼装 |
