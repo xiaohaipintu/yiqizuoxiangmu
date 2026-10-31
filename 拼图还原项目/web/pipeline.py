@@ -837,7 +837,27 @@ def solve(
     if not pieces_json.exists():
         raise RuntimeError("分割失败：没有生成 pieces.json")
 
-    # 1.2) 清理多边形：影子/阴影会把一条直边切成两段，合并掉近共线的假顶点
+    # 1.2) 绿幕抠图重测（抄自 foweh 分支 71c008c）：
+    #      YCbCr 色度键控（只看 Cr/Cb，不看亮度 → 影子天然排除）+ 软 alpha
+    #      + despill + 沿边法线找 alpha=0.5 的亚像素边界，再直线拟合求交。
+    #      segment.py 的「ΔE > 阈值」会被 3~5px 模糊带骗，边长偏大 3%~9%；
+    #      这里把多边形重算一遍，面积/质心/边表同步刷新。
+    keyed_img = out / "keyed.jpg"
+    alpha_png = out / "key_alpha.png"
+    key_info: dict = {}
+    try:
+        import resegment                      # 同目录模块，延迟导入避免循环依赖
+        key_info = resegment.refine_pieces(
+            image_path, pieces_json, pieces_json, alpha_png, keyed_img
+        )
+        detail = "、".join(f"{c['piece']} {c['vertices']}"
+                          for c in key_info.get("changes", []))
+        step("key", f"绿幕抠图重测 {key_info.get('found')} 块：{detail or '无变化'}")
+    except Exception as exc:
+        key_info = {"error": str(exc)}
+        step("key", f"抠图重测跳过：{exc}")
+
+    # 1.3) 清理多边形：影子/阴影会把一条直边切成两段，合并掉近共线的假顶点
     clean = clean_pieces(pieces_json)
     if clean.get("merged"):
         detail = "、".join(f"{m['piece']} {m['from']}→{m['to']}" for m in clean["merged"])
@@ -1017,16 +1037,17 @@ def solve(
     info: dict = {}
     if solution:
         try:
-            # 绿幕反光会把背景绿染到纸片边缘：有 despill 版本就优先用它贴图
-            render_src = out / "01_despill.jpg"
-            if not render_src.exists():
-                render_src = image_path
+            # 贴图源优先级：绿幕抠图后的 keyed.jpg（已 despill）> 01_despill.jpg > 原图
+            render_src = keyed_img if keyed_img.exists() else (
+                out / "01_despill.jpg" if (out / "01_despill.jpg").exists() else image_path)
+            # 蒙版优先级：key_alpha.png（亚像素软边）> 01_alpha.png
+            render_alpha = alpha_png if alpha_png.exists() else out / "01_alpha.png"
             rendered = render_assembled(render_src, scaled_json, best_union, assembled,
                                         names=names, labels_out=assembled_labels,
                                         edge_starts=starts, info=info,
                                         solution=solution,
                                         fg_mask_path=out / "01_mask.png",
-                                        fg_alpha_path=out / "01_alpha.png")
+                                        fg_alpha_path=render_alpha)
         except Exception as exc:                      # 渲染失败退回排名图
             metrics["render_error"] = str(exc)
     if not rendered:
@@ -1046,6 +1067,7 @@ def solve(
         "joints": info.get("joints", []),
         "ranking": ranking,
         "clean": clean,
+        "keying": key_info,
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }
