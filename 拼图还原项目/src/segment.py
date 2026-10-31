@@ -505,27 +505,17 @@ def main() -> int:
         (60, 60, 255), (60, 200, 255), (0, 200, 0), (255, 120, 0),
         (255, 0, 255), (0, 255, 255), (200, 0, 200), (0, 128, 255),
     ]
-    # 标注字号随图高缩放，下限 0.8：小图（如 810 高）原来的固定 0.45 号看不清
-    sc = max(0.8, bgr.shape[0] / 1400.0)
     for p in pieces:
         poly = np.array(p["polygon"], dtype=np.int32)
         col = palette[(p["id"] - 1) % len(palette)]
-        cv2.polylines(vis, [poly], True, col, max(2, int(round(2.5 * sc))))
+        cv2.polylines(vis, [poly], True, col, 2)
         c = tuple(int(v) for v in p["centroid"])
-        cv2.putText(vis, f"#{p['id']}", (c[0] - int(22 * sc), c[1] + int(10 * sc)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.6 * sc, (0, 0, 0),
-                    max(2, int(round(5 * sc))), cv2.LINE_AA)
-        cv2.putText(vis, f"#{p['id']}", (c[0] - int(22 * sc), c[1] + int(10 * sc)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.6 * sc, (255, 255, 255),
-                    max(1, int(round(2.4 * sc))), cv2.LINE_AA)
+        cv2.putText(vis, f"#{p['id']}", (c[0] - 18, c[1] + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 3)
+        cv2.putText(vis, f"#{p['id']}", (c[0] - 18, c[1] + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 1)
         for e in p["edges"]:
             m = (int(e["mid"][0]), int(e["mid"][1]))
-            lab = f"{p['id']}e{e['index']}"
-            fo = max(0.85, 0.95 * sc)
-            cv2.putText(vis, lab, m, cv2.FONT_HERSHEY_SIMPLEX, fo, (0, 0, 0),
-                        max(2, int(round(3.4 * sc))), cv2.LINE_AA)
-            cv2.putText(vis, lab, m, cv2.FONT_HERSHEY_SIMPLEX, fo, (255, 255, 255),
-                        max(1, int(round(1.7 * sc))), cv2.LINE_AA)
+            cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2)
+            cv2.putText(vis, f"{p['id']}e{e['index']}", m, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     cv2.imwrite(str(outdir / "02_pieces.png"), vis)
     render_cutouts(despilled, alpha, pieces, outdir / "03_cutouts.png")
 
