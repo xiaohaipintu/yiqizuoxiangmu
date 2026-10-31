@@ -327,13 +327,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         job["upload"] = str(upload_path)
-        job["beam_time"] = float(self.headers.get("X-Beam-Time") or 45)
+        job["beam_time"] = None          # 自动：按碎片数给预算，不够吻合自己加时
         job["concave"] = (self.headers.get("X-Concave") or "1") != "0"
         JOB_QUEUE.put(job["id"])
-        print(f"[任务 {job['id']}] 收到 {length // 1024}KB 图片，"
-              f"beam={job['beam_time']}s concave={job['concave']}")
-        log_event(f"任务 {job['id']} 收到 {length // 1024}KB 图片 "
-                  f"beam={job['beam_time']}s concave={job['concave']}")
+        print(f"[任务 {job['id']}] 收到 {length // 1024}KB 图片，concave={job['concave']}")
+        log_event(f"任务 {job['id']} 收到 {length // 1024}KB 图片 concave={job['concave']}")
         self._json(200, {"id": job["id"]})
 
 

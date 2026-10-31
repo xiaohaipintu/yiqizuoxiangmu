@@ -261,6 +261,33 @@ def eval_metrics(polys: list) -> dict:
         return {}
 
 
+GOOD_LEN_DIFF = 4.0          # 对接边长差 ≤4% 认为拼对了
+GOOD_PAIRS_RATIO = 1.0       # 贴合对数至少要 n-1（串成一串）
+
+
+def beam_plan(n_pieces: int, total_edges: int) -> list:
+    """按碎片数量和边的总数，自动排一个「先小预算试，不行再加时」的计划。
+
+    用户不需要选搜索时长：先给一个够用的预算，拼得不够吻合再翻倍重搜，
+    最多三次（总时长在 solve() 里还有 150 秒硬上限）。
+    """
+    base = {2: 5, 3: 8, 4: 18, 5: 35, 6: 50}.get(n_pieces, 70)
+    avg_edges = total_edges / max(n_pieces, 1)
+    if avg_edges > 8:            # 凹形/多顶点碎片，搜索空间更大
+        base = int(base * 1.4)
+    base = max(5, min(base, 70))
+    return [base, min(base * 2, 110), min(int(base * 3.5), 150)]
+
+
+def beam_ok(pick: dict | None, n_pieces: int) -> bool:
+    """这次搜索的结果够不够好（够好就不再加时）。"""
+    if not pick:
+        return False
+    if pick["pairs"] < max(1, n_pieces - 1):
+        return False
+    return pick["diff"] <= GOOD_LEN_DIFF
+
+
 def _joint_length_diff(joints: list, lengths: dict) -> float:
     if not joints:
         return 999.0
@@ -510,7 +537,7 @@ def render_assembled(
 def solve(
     image_path: str | Path,
     out_dir: str | Path,
-    beam_time: float = 45.0,
+    beam_time: float | None = None,
     concave: bool = True,
     log=None,
 ) -> dict:
@@ -537,7 +564,7 @@ def solve(
             "\n" + "#" * 70 + "\n"
             f"# 任务开始 {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"# 输入 {image_path}\n"
-            f"# 参数 beam_time={beam_time}s concave={concave}\n"
+            f"# 参数 beam_time={beam_time or 'auto'}s concave={concave}\n"
             f"# Python {sys.version.split()[0]}  cwd={PROJ_DIR}\n"
             + "#" * 70 + "\n"
         )
@@ -611,17 +638,31 @@ def solve(
          ["--pieces", pieces_json, "--out", scaled_json], timeout=120, log=step, steps=steps,
          logs_dir=logs)
 
-    # 3) 束搜索拼合
-    step("beam", f"搜索拼法（最多 {int(beam_time)} 秒）…")
-    _run("beam_search.py",
-         ["--pieces", scaled_json, "--out", out,
-          "--beam", "300", "--time", str(float(beam_time))],
-         timeout=beam_time + 240, log=step, steps=steps,
-         logs_dir=logs)
+    # 3) 束搜索拼合 —— 时间预算自动决定，拼得不满意就自己加时重搜
+    total_edges = sum(len(p.get("edges") or []) for p in piece_list)
+    plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
     sol_json = out / "beam_solutions.json"
-    if not sol_json.exists():
-        raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
-    n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
+    beam_runs: list[dict] = []
+    pick = None
+    n_sol = 0
+    for i, budget in enumerate(plan):
+        step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
+        _run("beam_search.py",
+             ["--pieces", scaled_json, "--out", out,
+              "--beam", "300", "--time", str(float(budget))],
+             timeout=budget + 240, log=step, steps=steps,
+             logs_dir=logs)
+        if not sol_json.exists():
+            raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
+        n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
+        if not n_sol:
+            continue
+        pick = rerank_solutions(sol_json, names, starts)
+        beam_runs.append({"budget": budget, "solutions": n_sol,
+                          "len_diff": pick["diff"] if pick else None,
+                          "pairs": pick["pairs"] if pick else 0})
+        if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
+            break
     if not n_sol:
         raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
 
@@ -637,24 +678,20 @@ def solve(
     assembled_labels = out / "assembled_labels.jpg"
     best_union = out / "best_union.json"
 
-    # 4.5) 候选重排：eval_union 只按空洞/重叠排序，分不出「接错了边」
-    #      （错边相接同样能拼满、同样是 0 空洞 0 重叠），所以再按对接边长度一致度挑一遍
+    # 4.5) 候选重排（beam 循环里已经算过一次，这里只做落盘）
     step("rerank", "按对接边长度一致度重排候选…")
     solution = None
-    ranking: dict = {}
-    pick = None
-    try:
-        pick = rerank_solutions(sol_json, names, starts)
-    except Exception as exc:
-        ranking["error"] = str(exc)
+    ranking: dict = {"beam_runs": beam_runs}
     if pick:
         entry = pick["entry"]
         solution = {"placed": entry.get("placed"), "polys": entry.get("polys")}
-        ranking = {
+        ranking.update({
             "chosen": f"beam#{pick['index']}",
             "mean_len_diff_pct": pick["diff"],
             "joint_pairs": pick["pairs"],
-        }
+            "budget_s": beam_runs[-1]["budget"] if beam_runs else None,
+            "attempts": len(beam_runs),
+        })
         (out / "chosen_solution.json").write_text(
             json.dumps({"ranking": ranking, **solution}, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -662,7 +699,7 @@ def solve(
     elif best_union.exists():
         try:
             solution = json.loads(best_union.read_text(encoding="utf-8"))
-            ranking = {"chosen": "best_union"}
+            ranking["chosen"] = "best_union"
         except Exception:
             solution = None
 
@@ -728,7 +765,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="拼图还原流水线")
     ap.add_argument("--image", required=True, help="输入照片")
     ap.add_argument("--out", required=True, help="输出目录（ASCII 路径）")
-    ap.add_argument("--time", type=float, default=45.0, help="束搜索时间预算（秒）")
+    ap.add_argument("--time", type=float, default=None,
+                    help="束搜索时间预算（秒）。不给就按碎片数自动决定，不够吻合会自动加时")
     ap.add_argument("--no-concave", action="store_true", help="关闭凹形拟合")
     args = ap.parse_args()
 

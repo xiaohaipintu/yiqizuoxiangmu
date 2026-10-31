@@ -194,21 +194,15 @@
     </div>
 
     <div class="row" style="margin-top: 12px;">
-      <span class="label">搜索时长</span>
-      <div class="seg" id="time-seg">
-        <button type="button" data-t="15">15s</button>
-        <button type="button" data-t="30">30s</button>
-        <button type="button" data-t="45" class="on">45s</button>
-        <button type="button" data-t="90">90s</button>
-      </div>
-    </div>
-    <div class="row" style="margin-top: 8px;">
       <span class="label">有凹形碎片（弯边/缺角）</span>
       <div class="seg" id="concave-seg">
         <button type="button" data-v="1" class="on">是</button>
         <button type="button" data-v="0">否</button>
       </div>
     </div>
+    <p class="label" style="margin: 10px 0 0; line-height: 1.6;">
+      搜索时长由服务器按碎片数量和形状自动决定，拼得不够吻合会自己加时重搜，不用你操心。
+    </p>
   </section>
 
   <!-- 2. 进度 -->
@@ -306,7 +300,6 @@
   var dropZone = $('drop-zone');
   var fileInput = $('file');
 
-  var beamTime = 45;
   var concave = '1';
   var polling = null;
   var startedAt = 0;
@@ -314,12 +307,6 @@
   var current = null;          // {jobId, result}
 
   // ---------- 参数选择 ----------
-  $('time-seg').addEventListener('click', function (e) {
-    var b = e.target.closest('button[data-t]');
-    if (!b) return;
-    beamTime = Number(b.dataset.t);
-    [].forEach.call(this.children, function (x) { x.classList.toggle('on', x === b); });
-  });
   $('concave-seg').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-v]');
     if (!b) return;
@@ -389,7 +376,6 @@
       method: 'POST',
       headers: {
         'Content-Type': 'image/jpeg',
-        'X-Beam-Time': String(beamTime),
         'X-Concave': concave
       },
       body: blob
@@ -502,6 +488,8 @@
         '选中的候选：' + ranking.chosen +
         (ranking.mean_len_diff_pct !== undefined
           ? ' · 对接边长度差 ' + ranking.mean_len_diff_pct + '%' : '') +
+        (ranking.budget_s ? ' · 搜索预算 ' + ranking.budget_s + 's' : '') +
+        (ranking.attempts > 1 ? '（自动加时，共搜了 ' + ranking.attempts + ' 次）' : '') +
         '</p>';
     }
     if (!joints.length) {
