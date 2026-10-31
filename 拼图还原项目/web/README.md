@@ -25,6 +25,8 @@ python web/server.py --port 8000
 2. 有弯边、缺角的凹形碎片，把「有凹形碎片」保持为「是」
 3. 等进度条走完 → 左边是你拍的原图，右边是拼好的图，可长按/点按钮保存
 
+**中途想换照片**：进度卡片底部有个「暂停 · 换一张照片」按钮。点一下立刻退出等待、回到上传页，可以重选/重拍一张直接重跑。后端会在**下一个步骤边界**丢弃剩余工作（正在跑的那个子步骤会跑完，比如 beam 搜索最多再等它几十秒；还没轮到 eval / render / 打包就会被跳过），结果不再产出。
+
 **搜索时长不用你选** —— 服务器按碎片数量和形状自动定预算，拼得不够吻合会自己加时重搜（见下节）。
 
 底部「查看候选排名图」里还有最佳四名的对比图和分割掩膜，方便判断哪一步出了问题。
@@ -102,12 +104,13 @@ A1 ↔ C4  贴合 100%      A10 ↔ B1  贴合 100%      C1 ↔ D4  贴合 100%
 
 搜索时长**不再由用户指定**：`/api/solve` 不接受 `X-Beam-Time`（旧版客户端传了也会被忽略），一律走自动预算 + 自动加时。
 
-## HTTP 接口（前端就是调这三个）
+## HTTP 接口（前端就是调这四个）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `POST` | `/api/solve` | body = 图片原始字节（不是 multipart），返回 `{"id": "..."}` |
-| `GET` | `/api/job?id=...` | 任务状态：`status`(queued/running/done/error)、`step`、`progress`、`log`、`result` |
+| `POST` | `/api/cancel?id=...` | 暂停：只打标记不杀进程，worker 在步骤边界丢弃剩余工作；返回 `{"cancelled": true}` |
+| `GET` | `/api/job?id=...` | 任务状态：`status`(queued/running/done/error/cancelled)、`step`、`progress`、`log`、`result`、`cancelled` |
 | `GET` | `/api/file?id=...&n=文件名` | 取结果文件，白名单见 `server.py` 的 `ALLOWED_FILES` |
 
 `result` 结构：

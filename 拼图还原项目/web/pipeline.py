@@ -534,12 +534,17 @@ def render_assembled(
 # --------------------------------------------------------------------------
 # 主流程
 # --------------------------------------------------------------------------
+class JobCancelled(Exception):
+    """用户暂停/放弃任务。流水线在下一个步骤边界立刻停手，不再往下跑。"""
+
+
 def solve(
     image_path: str | Path,
     out_dir: str | Path,
     beam_time: float | None = None,
     concave: bool = True,
     log=None,
+    should_cancel=None,
 ) -> dict:
     """跑完整条流水线，返回结果摘要。out_dir 必须已存在且路径为 ASCII。"""
     out = Path(out_dir)
@@ -553,6 +558,10 @@ def solve(
     steps: dict[str, float] = {}
 
     def step(name: str, extra: str = ""):
+        # 步骤边界就是暂停点：每个子步骤前后都会经过 step()，所以点「暂停」后
+        # 最多再等当前这一个子步骤跑完（beam 搜索可能要几十秒），不会继续往下一层走。
+        if should_cancel is not None and should_cancel():
+            raise JobCancelled("用户暂停")
         if log:
             log(name, extra)
 

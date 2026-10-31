@@ -213,6 +213,9 @@
     </div>
     <div class="bar"><span id="prog-bar"></span></div>
     <div class="steps-log" id="prog-log"></div>
+    <button class="btn" id="btn-pause" style="width:100%;margin-top:12px;">
+      暂停 · 换一张照片
+    </button>
   </section>
 
   <!-- 3. 错误 -->
@@ -302,6 +305,8 @@
 
   var concave = '1';
   var polling = null;
+  var timer = null;
+  var currentJobId = null;
   var startedAt = 0;
   var showLabels = true;
   var current = null;          // {jobId, result}
@@ -359,6 +364,23 @@
     show('error');
   }
 
+  function stopTimers() {
+    if (polling) { clearInterval(polling); polling = null; }
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  // 「暂停」= 中止当前任务：前端立刻退出等待，后端在下一个步骤边界丢弃剩余工作。
+  // 停完后回到上传页，可以直接选/换一张照片重新提交。
+  function pauseJob() {
+    var id = currentJobId;
+    stopTimers();
+    if (id) {
+      fetch('/api/cancel?id=' + encodeURIComponent(id), { method: 'POST', keepalive: true })
+        .catch(function () { /* 网络断了也无所谓，前端已经退出等待 */ });
+    }
+    reset();
+  }
+
   function tickTimer() {
     var s = Math.floor((Date.now() - startedAt) / 1000);
     $('prog-time').textContent = s + 's';
@@ -370,7 +392,9 @@
     $('prog-step').textContent = '上传中…';
     $('prog-bar').style.width = '4%';
     $('prog-log').textContent = '';
-    var timer = setInterval(tickTimer, 500);
+    stopTimers();
+    currentJobId = null;
+    timer = setInterval(tickTimer, 500);
 
     fetch('/api/solve', {
       method: 'POST',
@@ -383,6 +407,7 @@
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) throw new Error(res.j.error || '上传失败');
+        currentJobId = res.j.id;
         $('prog-step').textContent = '已上传，排队中…';
         poll(res.j.id, timer);
       })
@@ -425,7 +450,7 @@
 
   function humanize(msg) {
     if (/只找到|没有可区分/.test(msg)) return '照片里没识别出碎片。\n建议：碎片放在纯色（绿/白）背景上，不要互相压住，光线均匀不反光。';
-    if (/没有找到任何拼法/.test(msg)) return '找到了碎片，但没搜出拼法。\n建议：把「搜索时长」调到 90s 再试，或确认碎片没有互相遮挡。';
+    if (/没有找到任何拼法/.test(msg)) return '找到了碎片，但没搜出拼法。\n建议：确认碎片没有互相遮挡、换个更干净的背景再试。';
     if (/读不到图片|无法识别/.test(msg)) return '图片读不出来，换一张 JPG/PNG 试试。';
     return msg;
   }
@@ -530,13 +555,15 @@
   });
 
   function reset() {
-    if (polling) { clearInterval(polling); polling = null; }
+    stopTimers();
+    currentJobId = null;
     current = null;
     $('img-upload').src = ''; $('img-assembled').src = '';
     show('upload');
   }
   $('btn-retry').addEventListener('click', reset);
   $('btn-again').addEventListener('click', reset);
+  $('btn-pause').addEventListener('click', pauseJob);
 })();
 </script>
 </body>

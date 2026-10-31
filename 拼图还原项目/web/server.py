@@ -115,6 +115,7 @@ def new_job() -> dict:
         "created": time.time(),
         "result": None,
         "error": None,
+        "cancelled": False,          # 用户点了「暂停」，worker 在步骤边界停手
         "dir": str(pipeline.job_root() / job_id),
     }
     with JOBS_LOCK:
@@ -139,6 +140,13 @@ def worker() -> None:
             job = JOBS.get(job_id)
         if not job:
             continue
+        # 还在排队就被暂停了：直接丢弃，省下整条流水线
+        if job.get("cancelled"):
+            job["status"] = "cancelled"
+            job["step"] = "已暂停"
+            _cleanup(job)
+            log_event(f"任务 {job['id']} 排队时被暂停，已丢弃")
+            continue
         WORKER_LOCK.acquire()
         try:
             job["status"] = "running"
@@ -155,6 +163,7 @@ def worker() -> None:
                 beam_time=job["beam_time"],
                 concave=job["concave"],
                 log=log,
+                should_cancel=lambda: job.get("cancelled", False),
             )
             job["result"] = result
             job["progress"] = 100
@@ -164,6 +173,12 @@ def worker() -> None:
                       f"{result.get('steps', {}).get('total')}s，"
                       f"空洞 {result.get('metrics', {}).get('holes_pct')}% / "
                       f"重叠 {result.get('metrics', {}).get('overlap_pct')}%")
+        except pipeline.JobCancelled:
+            job["status"] = "cancelled"
+            job["step"] = "已暂停"
+            job["log"].append("[pause] 用户暂停，已停止后续步骤")
+            log_event(f"任务 {job['id']} 被用户暂停")
+            _cleanup(job)
         except Exception as exc:
             job["status"] = "error"
             job["error"] = str(exc)
@@ -259,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                 "error": job["error"],
                 "log": job["log"][-12:],
                 "result": job["result"],
+                "cancelled": job.get("cancelled", False),
             })
             return
 
@@ -295,6 +311,21 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- POST ----------
     def do_POST(self):
         path = urlparse(self.path).path
+        # 暂停：只打标记，不杀子进程（当前子步骤会跑完，后续步骤不再开始）
+        if path == "/api/cancel":
+            job_id = self._query().get("id", "")
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+            if not job:
+                self._json(404, {"error": "任务不存在或已过期"})
+                return
+            job["cancelled"] = True
+            if job["status"] == "queued":
+                job["status"] = "cancelled"
+                job["step"] = "已暂停"
+            log_event(f"任务 {job_id} 收到暂停请求")
+            self._json(200, {"id": job_id, "cancelled": True})
+            return
         if path != "/api/solve":
             self._json(404, {"error": "not found"})
             return
