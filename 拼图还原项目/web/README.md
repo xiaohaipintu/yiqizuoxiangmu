@@ -149,6 +149,37 @@ A1 ↔ C4  贴合 100%      A10 ↔ B1  贴合 100%      C1 ↔ D4  贴合 100%
 
 带名称的图：`upload_labels.jpg`（原图标注版）、`assembled_labels.jpg`（成品图标注版）。
 
+## 部署到云服务器（Tailscale 访问）
+
+服务器：腾讯云上海 `wildyouth-api`（Tailscale `100.67.40.70`），系统 Ubuntu 20.04 / Python 3.8。
+
+**访问地址：<http://100.67.40.70:8099/>**（Tailscale 内网，公网不开放）
+
+| 项 | 值 |
+| --- | --- |
+| 代码 | `/home/ubuntu/jigsaw/app`（`web/` + `src/`） |
+| 虚拟环境 | `/home/ubuntu/jigsaw/venv`（numpy 1.24 / cv2 4.8 headless / shapely 2.0 / scipy 1.10 / qrcode） |
+| 服务 | `systemd` 单元 `jigsaw-web.service`（已 enable，开机自启） |
+| 端口 | 8099，`ufw` 只放行 `tailscale0` 进来的流量 |
+| 日志 | `/home/ubuntu/jigsaw/web.log`；单步日志在 `/home/ubuntu/jigsaw/tmp/jigsaw-jobs/<job>/logs/` |
+
+常用命令：
+
+```bash
+ssh -i ~/Downloads/chongzuang.pem ubuntu@100.67.40.70
+sudo systemctl status jigsaw-web       # 看状态
+sudo systemctl restart jigsaw-web      # 重启
+tail -f /home/ubuntu/jigsaw/web.log    # 看日志
+```
+
+**更新代码**：服务器上 GitHub 直连被墙（`GnuTLS recv error`），所以走本地打包上传：
+
+```bash
+bash 拼图还原项目/web/deploy_to_server.sh     # 在自己的电脑、仓库根目录执行
+```
+
+脚本做的事：本地 `tar` 打包 `web/ + src/` → `scp` 上去 → 解包 → `systemctl restart`。
+
 ## 实时预览（进度页能看图，不干等进度条）
 
 做法参考队友 Luna 的 `luna` 分支（`63c050e`），思路很干净：
