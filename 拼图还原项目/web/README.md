@@ -28,6 +28,20 @@ python web/server.py --port 8000
 
 底部「查看候选排名图」里还有最佳四名的对比图和分割掩膜，方便判断哪一步出了问题。
 
+## 碎片与边的命名（方便两人沟通）
+
+页面上的图默认带名称，右下「图上显示名称」可切换显示 / 隐藏。
+
+| 对象 | 名字 | 规则 |
+| --- | --- | --- |
+| 碎片 | `A`、`B`、`C`… | 按 `pieces.json` 里的顺序（26 块之后 AA、AB…） |
+| 边 | `A1`、`A2`… | 从**最上面的顶点**开始（同高取最左），按顶点顺序环状编号；第 k 条边 = 第 k 个顶点 → 第 k+1 个顶点 |
+
+**原图和拼好的图上标的是同一套名字**，因为拼合过程只对碎片做刚体变换，顶点顺序不变。所以可以直接说「B 的 B2 边接 C 的 C1 边」。
+
+页面下方的「碎片 / 边的名称对照表」会列出每块碎片的顶点数、面积，以及每条边的名字和像素长度——边长相近的两条边才可能是对接边，对照表就是用来干这个的。
+
+
 ## 拍照要求（成功率的关键）
 
 - 碎片放在**纯色背景**上（绿/白最佳），不要用花纹桌布
@@ -63,9 +77,16 @@ python web/server.py --port 8000
   "metrics": {"holes_pct": 0.0, "overlap_pct": 0.0},
   "steps": {"segment": 2.2, "rescale_pieces": 1.0, "beam_search": 31.2,
             "eval_union": 1.2, "total": 36.2},
-  "files": ["assembled.jpg", "41_union_rank.png", "..."]
+  "labels": [
+    {"name": "A", "id": 1, "vertices": 11, "area": 395997.5,
+     "edges": [{"name": "A1", "length": 375.5}, {"name": "A2", "length": 150.1}]}
+  ],
+  "has_labels": true,
+  "files": ["assembled.jpg", "assembled_labels.jpg", "upload_labels.jpg", "..."]
 }
 ```
+
+带名称的图：`upload_labels.jpg`（原图标注版）、`assembled_labels.jpg`（成品图标注版）。
 
 ## 实现要点（踩过的坑）
 

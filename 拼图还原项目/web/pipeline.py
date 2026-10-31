@@ -72,6 +72,84 @@ def write_image(path: str | Path, img: np.ndarray, quality: int = 92) -> None:
 
 
 # --------------------------------------------------------------------------
+# 命名与标注：碎片叫 A / B / C…，每块碎片的边叫 A1 / A2 / …
+# --------------------------------------------------------------------------
+_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def piece_name(index: int) -> str:
+    """0 → A, 25 → Z, 26 → AA …（按 pieces.json 里的顺序）"""
+    out = ""
+    i = index + 1
+    while i > 0:
+        i, r = divmod(i - 1, 26)
+        out = _ALPHA[r] + out
+    return out
+
+
+def edges_of(poly) -> list:
+    """返回 [(边序号, 起点, 终点)]。
+
+    编号规则（固定、可复现）：从**最上方的顶点**开始（同高取最左），
+    按多边形顶点顺序环状编号，第 k 条边 = 第 k 个顶点 → 第 k+1 个顶点。
+    """
+    pts = np.asarray(poly, dtype=np.float64)
+    n = len(pts)
+    if n < 3:
+        return []
+    start = min(range(n), key=lambda k: (round(float(pts[k][1]), 2),
+                                         round(float(pts[k][0]), 2)))
+    out = []
+    for k in range(n):
+        i = (start + k) % n
+        j = (i + 1) % n
+        out.append((k + 1, pts[i], pts[j]))
+    return out
+
+
+def _text(img, s: str, org, size: float, color, thick: int) -> None:
+    """以 org 为中心写一行字（先描黑边，保证在任何底色上都看得清）。"""
+    (w, h), _ = cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, size, thick)
+    x = int(round(org[0] - w / 2))
+    y = int(round(org[1] + h / 2))
+    cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, size,
+                (0, 0, 0), thick + 3, cv2.LINE_AA)
+    cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, size,
+                color, thick, cv2.LINE_AA)
+
+
+def draw_labels(img: np.ndarray, pieces: list) -> np.ndarray:
+    """在图上标出碎片名（质心）与边名（边中点，略往内部偏）。
+
+    pieces: [(碎片名, 多边形坐标数组), …]
+    """
+    if not pieces:
+        return img
+    scale = max(0.45, img.shape[0] / 950.0)      # 字号随图片高度缩放
+    for name, poly in pieces:
+        pts = np.asarray(poly, dtype=np.float64)
+        if len(pts) < 3:
+            continue
+        cv2.polylines(
+            img,
+            [np.round(pts).astype(np.int32).reshape(-1, 1, 2)],
+            True, (248, 189, 56), max(1, int(round(2 * scale))), cv2.LINE_AA,
+        )
+        centroid = pts.mean(axis=0)
+        _text(img, name, centroid, 1.15 * scale, (255, 255, 255),
+              max(2, int(round(2 * scale))))
+        for no, a, b in edges_of(pts):
+            mid = (a + b) / 2.0
+            d = mid - centroid
+            length = float(np.linalg.norm(d))
+            if length > 1e-6:                     # 往碎片内部挪一点，别压在轮廓上
+                mid = mid - d / length * (16 * scale)
+            _text(img, f"{name}{no}", mid, 0.62 * scale, (138, 240, 254),
+                  max(1, int(round(1.6 * scale))))
+    return img
+
+
+# --------------------------------------------------------------------------
 # 调用 src/ 下的脚本
 # --------------------------------------------------------------------------
 def _run(script: str, args: list, timeout: float, log, steps: dict | None = None) -> subprocess.CompletedProcess:
@@ -108,6 +186,8 @@ def render_assembled(
     out_path: str | Path,
     margin: int = 28,
     max_side: int = 1400,
+    names: dict | None = None,
+    labels_out: str | Path | None = None,
 ) -> bool:
     img = read_image(image_path)
     sol = json.loads(Path(best_union_path).read_text(encoding="utf-8"))
@@ -135,6 +215,7 @@ def render_assembled(
 
     h_img, w_img = img.shape[:2]
     painted = 0
+    canvas_polys = []
     for k, item in enumerate(placed):
         if k >= len(polys):
             break
@@ -188,6 +269,7 @@ def render_assembled(
             continue
         canvas[sel] = warped[sel]
         painted += int(sel.sum())
+        canvas_polys.append((pid, poly_canvas))
 
     if painted == 0:
         return False
@@ -199,7 +281,14 @@ def render_assembled(
             (max(int(width * scale), 1), max(int(height * scale), 1)),
             interpolation=cv2.INTER_AREA,
         )
+        canvas_polys = [(pid, poly * scale) for pid, poly in canvas_polys]
     write_image(out_path, canvas, quality=93)
+
+    # 带名称的版本：碎片名（A/B/C）+ 边名（A1/A2…），和原图上的编号一致
+    if labels_out:
+        named = [(names.get(pid, str(pid)) if names else str(pid), poly)
+                 for pid, poly in canvas_polys]
+        write_image(labels_out, draw_labels(canvas.copy(), named), quality=93)
     return True
 
 
@@ -253,6 +342,38 @@ def solve(
     if n_pieces < 2:
         raise RuntimeError(f"只找到 {n_pieces} 块碎片，照片里可能没有可区分的碎片")
 
+    # 1.5) 给碎片和边命名：A/B/C… 与 A1/A2/…（原图与成品图用同一套编号）
+    piece_list = json.loads(pieces_json.read_text(encoding="utf-8")).get("pieces", [])
+    names: dict[int, str] = {}
+    labels: list[dict] = []
+    for i, piece in enumerate(piece_list):
+        pid = int(piece["id"])
+        name = piece_name(i)
+        names[pid] = name
+        poly = np.asarray(piece["polygon"], dtype=np.float64)
+        labels.append({
+            "name": name,
+            "id": pid,
+            "vertices": int(len(poly)),
+            "area": round(float(piece.get("area") or 0.0), 1),
+            "edges": [
+                {
+                    "name": f"{name}{no}",
+                    "length": round(float(np.linalg.norm(b - a)), 1),
+                }
+                for no, a, b in edges_of(poly)
+            ],
+        })
+    # 原图上的标注版
+    upload_labels = out / "upload_labels.jpg"
+    try:
+        marked = src_img.copy()
+        draw_labels(marked, [(names[int(p["id"])], np.asarray(p["polygon"], float))
+                             for p in piece_list])
+        write_image(upload_labels, marked, quality=92)
+    except Exception:
+        upload_labels = None
+
     # 2) 尺度补偿
     step("rescale", f"{n_pieces} 块，尺度补偿…")
     scaled_json = out / "pieces_scaled.json"
@@ -280,6 +401,7 @@ def solve(
     # 5) 渲染成品图
     step("render", "按位姿贴回真实像素…")
     assembled = out / "assembled.jpg"
+    assembled_labels = out / "assembled_labels.jpg"
     best_union = out / "best_union.json"
     metrics: dict = {}
     if best_union.exists():
@@ -294,7 +416,8 @@ def solve(
     rendered = False
     if best_union.exists():
         try:
-            rendered = render_assembled(image_path, scaled_json, best_union, assembled)
+            rendered = render_assembled(image_path, scaled_json, best_union, assembled,
+                                        names=names, labels_out=assembled_labels)
         except Exception as exc:                      # 渲染失败退回排名图
             metrics["render_error"] = str(exc)
     if not rendered:
@@ -310,6 +433,8 @@ def solve(
         "solutions": n_sol,
         "metrics": metrics,
         "steps": steps,
+        "labels": labels,
+        "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }
     (out / "result.json").write_text(

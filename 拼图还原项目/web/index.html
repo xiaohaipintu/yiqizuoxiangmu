@@ -133,6 +133,21 @@
   .good { color: var(--ok); }
   .bad { color: var(--err); }
 
+  .chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    padding: 4px 8px; border-radius: 8px;
+    background: #0b1220; border: 1px solid var(--line);
+    font-size: .72rem; color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip b { color: #7dd3fc; font-weight: 700; font-size: .78rem; }
+  .piece-row { padding: 10px 0; border-top: 1px solid #243044; }
+  .piece-row:first-child { border-top: 0; padding-top: 2px; }
+  .piece-head { font-size: .82rem; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .piece-head b { font-size: 1.05rem; color: #7dd3fc; }
+  .piece-head span { color: var(--dim); font-size: .72rem; }
+
   .error-box {
     border: 1px solid rgba(248,113,113,.4);
     background: rgba(248,113,113,.08);
@@ -231,10 +246,29 @@
         <div class="metric"><b id="m-overlap">-</b><em>重叠率</em></div>
         <div class="metric"><b id="m-time">-</b><em>耗时</em></div>
       </div>
+      <div class="row" style="margin-top:12px;">
+        <span class="label">图上显示名称</span>
+        <div class="seg" id="label-seg">
+          <button type="button" data-v="1" class="on">显示</button>
+          <button type="button" data-v="0">隐藏</button>
+        </div>
+      </div>
+
       <div style="display:flex;gap:8px;margin-top:12px;">
         <a class="btn primary" id="btn-download" style="flex:1;text-decoration:none;" download="拼好的图.jpg">保存拼好的图</a>
         <button class="btn" id="btn-again" style="flex:1;">再来一张</button>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <details open>
+        <summary>碎片 / 边的名称对照表（方便沟通）</summary>
+        <p class="label" style="margin:8px 0 0;line-height:1.7;">
+          碎片按 <b>A、B、C…</b> 编号；每块的边从<b>最上面的顶点</b>开始按顶点顺序编号 <b>A1、A2…</b>。
+          原图与拼好的图上标的是同一套名字。
+        </p>
+        <div id="labels-table"></div>
+      </details>
     </div>
 
     <div class="card" style="margin-top:12px;">
@@ -265,6 +299,8 @@
   var concave = '1';
   var polling = null;
   var startedAt = 0;
+  var showLabels = true;
+  var current = null;          // {jobId, result}
 
   // ---------- 参数选择 ----------
   $('time-seg').addEventListener('click', function (e) {
@@ -280,6 +316,13 @@
     [].forEach.call(this.children, function (x) { x.classList.toggle('on', x === b); });
   });
 
+  $('label-seg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-v]');
+    if (!b) return;
+    showLabels = b.dataset.v === '1';
+    [].forEach.call(this.children, function (x) { x.classList.toggle('on', x === b); });
+    paintImages();
+  });
   // ---------- 前端压缩：长边限到 2000px，减少上传时间 ----------
   function shrink(file) {
     return new Promise(function (resolve, reject) {
@@ -391,12 +434,11 @@
   }
 
   function showResult(jobId, result) {
-    var base = '/api/file?id=' + encodeURIComponent(jobId) + '&n=';
-    $('img-upload').src = base + 'upload.jpg';
-    $('img-assembled').src = base + 'assembled.jpg';
-    $('img-rank').src = base + '41_union_rank.png';
-    $('img-mask').src = base + '01_mask.png';
-    $('btn-download').href = base + 'assembled.jpg';
+    current = { jobId: jobId, result: result };
+    $('img-rank').src = '/api/file?id=' + encodeURIComponent(jobId) + '&n=41_union_rank.png';
+    $('img-mask').src = '/api/file?id=' + encodeURIComponent(jobId) + '&n=01_mask.png';
+    paintImages();
+    paintLabelTable(result.labels || []);
 
     var m = result.metrics || {};
     $('m-pieces').textContent = result.pieces;
@@ -412,7 +454,31 @@
     show('result');
   }
 
-  // ---------- 入口 ----------
+  // ---------- 带名称的图 / 对照表 ----------
+  function paintImages() {
+    if (!current) return;
+    var base = '/api/file?id=' + encodeURIComponent(current.jobId) + '&n=';
+    var suf = showLabels ? '_labels' : '';
+    $('img-upload').src = base + 'upload' + suf + '.jpg';
+    $('img-assembled').src = base + 'assembled' + suf + '.jpg';
+    var dl = $('btn-download');
+    dl.href = base + 'assembled' + suf + '.jpg';
+    dl.download = '拼好的图' + (showLabels ? '-带名称' : '') + '.jpg';
+  }
+
+  function paintLabelTable(labels) {
+    var box = $('labels-table');
+    if (!labels.length) { box.innerHTML = ''; return; }
+    box.innerHTML = labels.map(function (p) {
+      var chips = (p.edges || []).map(function (e) {
+        return '<span class="chip"><b>' + e.name + '</b>' + e.length + 'px</span>';
+      }).join('');
+      return '<div class="piece-row">' +
+        '<div class="piece-head"><b>' + p.name + '</b>' +
+        '<span>' + p.vertices + ' 条边 · 面积 ' + Math.round(p.area).toLocaleString() + ' px²</span>' +
+        '</div><div class="chip-wrap">' + chips + '</div></div>';
+    }).join('');
+  }
   function handleFile(file) {
     if (!file) return;
     fileInput.value = '';
@@ -437,6 +503,7 @@
 
   function reset() {
     if (polling) { clearInterval(polling); polling = null; }
+    current = null;
     $('img-upload').src = ''; $('img-assembled').src = '';
     show('upload');
   }

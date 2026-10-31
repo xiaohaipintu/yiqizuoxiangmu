@@ -36,6 +36,7 @@ MAX_UPLOAD = 25 * 1024 * 1024          # 单张照片上限 25MB
 JOB_TTL = 6 * 3600                     # 任务结果保留 6 小时
 ALLOWED_FILES = {
     "upload.jpg", "assembled.jpg", "41_union_rank.png",
+    "upload_labels.jpg", "assembled_labels.jpg",
     "01_mask.png", "02_pieces.png", "beam_solutions.json",
     "best_union.json", "pieces.json", "pieces_scaled.json", "result.json",
 }
