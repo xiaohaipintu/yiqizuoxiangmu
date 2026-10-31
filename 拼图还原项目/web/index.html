@@ -182,6 +182,34 @@
 
   .hidden { display: none !important; }
   .footer { text-align: center; font-size: .7rem; color: #475569; }
+
+  /* 实时预览：流水线每完成一步就冒出一张图，不用干等进度条 */
+  .live { margin-top: 12px; }
+  .live-head {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: .78rem; color: var(--dim); margin-bottom: 8px;
+  }
+  .live-head b { color: var(--text); font-weight: 600; }
+  .live-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .live-tabs button {
+    font: inherit; font-size: .72rem; cursor: pointer;
+    padding: 4px 9px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+  }
+  .live-tabs button.on {
+    background: linear-gradient(150deg, var(--accent1), var(--accent2));
+    border-color: transparent; color: #fff;
+  }
+  .live-img {
+    width: 100%; display: block; border-radius: 8px;
+    background: #0f172a; border: 1px solid var(--line);
+  }
+  .live-img.flash { animation: liveflash .45s ease-out; }
+  @keyframes liveflash {
+    from { box-shadow: 0 0 0 2px rgba(56, 189, 248, .9); }
+    to { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0); }
+  }
+
 </style>
 </head>
 <body>
@@ -225,6 +253,12 @@
     </div>
     <div class="bar"><span id="prog-bar"></span></div>
     <div class="steps-log" id="prog-log"></div>
+    <!-- 实时预览：每跑完一步就自动出现对应的图 -->
+    <div class="live hidden" id="live-box">
+      <div class="live-head"><b>实时预览</b><span id="live-title"></span></div>
+      <div class="live-tabs" id="live-tabs"></div>
+      <img class="live-img" id="live-img" alt="实时预览" />
+    </div>
     <button class="btn" id="btn-pause" style="width:100%;margin-top:12px;">
       暂停 · 换一张照片
     </button>
@@ -332,7 +366,8 @@
   var startedAt = 0;
   var showLabels = true;
   var current = null;          // {jobId, result}
-
+  var livePinned = null;       // 用户手动选的预览阶段；选了就不再自动跟到最新
+  var liveJobId = null;
   // ---------- 参数选择 ----------
   $('concave-seg').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-v]');
@@ -408,6 +443,51 @@
     $('prog-time').textContent = s + 's';
   }
 
+  // ---------- 实时预览：流水线每完成一步就多一张图 ----------
+  function paintLive(items, jobId) {
+    var box = $('live-box');
+    if (!items || !items.length) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    var names = items.map(function (x) { return x.n; });
+    if (!livePinned || names.indexOf(livePinned) < 0) {
+      livePinned = names[names.length - 1];      // 默认跟着最新出现的那张
+    }
+    var it = null;
+    items.forEach(function (x) { if (x.n === livePinned) it = x; });
+    if (!it) it = items[items.length - 1];
+
+    var src = '/api/file?id=' + encodeURIComponent(jobId) +
+              '&n=' + encodeURIComponent(it.n) +
+              '&t=' + it.mtime + '-' + it.size;     // 时间戳破缓存
+    var img = $('live-img');
+    if (img.getAttribute('src') !== src) {
+      img.src = src;
+      img.classList.remove('flash');
+      void img.offsetWidth;
+      img.classList.add('flash');
+    }
+    $('live-title').textContent = it.title + ' · ' + Math.round(it.size / 1024) + ' KB';
+    $('live-tabs').innerHTML = items.map(function (x) {
+      return '<button type="button" data-n="' + x.n + '"' +
+             (x.n === livePinned ? ' class="on"' : '') + '>' + x.title + '</button>';
+    }).join('');
+  }
+
+  function refreshLive(jobId) {
+    liveJobId = jobId;
+    fetch('/api/preview?id=' + encodeURIComponent(jobId))
+      .then(function (r) { return r.json(); })
+      .then(function (p) { paintLive(p.items || [], jobId); })
+      .catch(function () { /* 预览失败不影响主流程 */ });
+  }
+
+  $('live-tabs').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-n]');
+    if (!b || !liveJobId) return;
+    livePinned = b.dataset.n;
+    refreshLive(liveJobId);
+  });
+
   function startJob(blob) {
     show('progress');
     startedAt = Date.now();
@@ -416,6 +496,10 @@
     $('prog-log').textContent = '';
     stopTimers();
     currentJobId = null;
+    livePinned = null;
+    liveJobId = null;
+    $('live-box').classList.add('hidden');
+    $('live-img').removeAttribute('src');
     timer = setInterval(tickTimer, 500);
 
     fetch('/api/solve', {
@@ -451,6 +535,7 @@
           if (job.log && job.log.length) {
             $('prog-log').textContent = job.log.slice(-8).join('\n');
           }
+          if (job.status === 'running') refreshLive(jobId);
           if (job.status === 'done') {
             clearInterval(polling); polling = null;
             clearInterval(timer);
@@ -614,6 +699,10 @@
     stopTimers();
     currentJobId = null;
     current = null;
+    livePinned = null;
+    liveJobId = null;
+    $('live-box').classList.add('hidden');
+    $('live-img').removeAttribute('src');
     $('img-upload').src = ''; $('img-assembled').src = '';
     show('upload');
   }

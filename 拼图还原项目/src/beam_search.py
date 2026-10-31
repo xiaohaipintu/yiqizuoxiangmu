@@ -35,6 +35,38 @@ def gap_pct(polys):
     return max(0.0, hull - s) / s * 100.0
 
 
+def render_progress(polys, level, n_total, gap, path) -> None:
+    """把当前最优的「已拼部分」画成一张小图，每层覆写一次。
+
+    搜索是纯 CPU 的，中间几十秒没有任何输出，网页端只剩一根进度条很乏味；
+    这里每层落一张图，前端轮询就能看到拼装过程一层层长出来。只画轮廓，开销可忽略。
+    """
+    try:
+        pts = np.vstack(polys).astype(np.float32)
+        x0, y0 = pts.min(axis=0)
+        x1, y1 = pts.max(axis=0)
+        pad = max(x1 - x0, y1 - y0) * 0.08 + 20.0
+        sx = 900.0 / max(x1 - x0 + 2 * pad, 1.0)
+        sy = 620.0 / max(y1 - y0 + 2 * pad, 1.0)
+        scale = max(min(sx, sy), 0.05)
+        w = max(2, int((x1 - x0 + 2 * pad) * scale))
+        h = max(2, int((y1 - y0 + 2 * pad) * scale))
+        canvas = np.full((h, w, 3), (26, 26, 38), np.uint8)
+        palette = [(235, 130, 60), (240, 160, 60), (120, 200, 90), (50, 160, 230),
+                   (220, 90, 200), (230, 220, 60), (180, 70, 180), (90, 150, 250)]
+        for i, poly in enumerate(polys):
+            p = np.asarray(poly, np.float32).reshape(-1, 2)
+            p = np.column_stack([(p[:, 0] - x0 + pad) * scale,
+                                 (p[:, 1] - y0 + pad) * scale])
+            cv2.polylines(canvas, [np.round(p).astype(np.int32)], True,
+                          palette[i % len(palette)], 3, cv2.LINE_AA)
+        cv2.putText(canvas, f"level {level}/{n_total}   gap {gap:.2f}%", (14, 36),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (240, 240, 240), 2, cv2.LINE_AA)
+        cv2.imwrite(str(path), canvas)
+    except Exception:
+        pass
+
+
 def expand(pieces, placed, polys, used, qid, cov, overlap_tol):
     q = pieces[qid]
     out = []
@@ -94,6 +126,8 @@ def main() -> int:
     states = [([(seed, 0.0, 0.0, 0.0)], [world(pieces[seed], 0.0, (0.0, 0.0))],
                {pid: set() for pid in pieces})]
     print(f"碎片 {len(pieces)}，起始块 #{seed}")
+    render_progress(states[0][1], 1, len(pieces), gap_pct(states[0][1]),
+                    outdir / "beam_progress.png")
     for level in range(2, len(pieces) + 1):
         cand = []
         for placed, polys, used in states:
@@ -117,6 +151,8 @@ def main() -> int:
         states = [(a, b, c) for a, b, c, _ in cand[: args.beam]]
         print(f"第 {level} 层：候选 {len(cand)}，缝最大 {cand[0][3]:.2f}% / "
               f"保留 {len(states)}（最差 {cand[min(len(cand) - 1, args.beam - 1)][3]:.2f}%）")
+        render_progress(states[0][1], level, len(pieces), cand[0][3],
+                        outdir / "beam_progress.png")
         if time.time() > deadline:
             print("超时，停在当前层")
             break

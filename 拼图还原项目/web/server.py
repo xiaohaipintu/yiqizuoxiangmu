@@ -47,6 +47,21 @@ ALLOWED_FILES = {
 
 
 # --------------------------------------------------------------------------
+# 实时预览：按流水线顺序列出"做完一步就该出现"的图，前端轮询它决定现在能看什么
+# --------------------------------------------------------------------------
+PREVIEW_FILES = [
+    ("upload_labels.jpg", "碎片与边的编号"),
+    ("key_alpha.png", "绿幕 alpha 蒙版"),
+    ("keyed.jpg", "去绿后的图"),
+    ("beam_progress.png", "拼装过程（每层刷新）"),
+    ("41_union_rank.png", "候选排名"),
+    ("assembled_labels.jpg", "拼好的成品（带名称）"),
+]
+for _n, _t in PREVIEW_FILES:
+    ALLOWED_FILES.add(_n)
+
+
+# --------------------------------------------------------------------------
 # 日志：任务目录里的 logs/ 会额外归档一份到这里，任务被清理后仍能翻
 # --------------------------------------------------------------------------
 def log_dir() -> Path:
@@ -258,6 +273,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, buf.getvalue(), "image/png")
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
+            return
+
+        if path == "/api/preview":
+            job_id = q.get("id", "")
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+            if not job:
+                self._json(404, {"error": "任务不存在或已过期"})
+                return
+            base = Path(job["dir"])
+            items = []
+            for name, title in PREVIEW_FILES:
+                f = base / name
+                if f.exists():
+                    try:
+                        stt = f.stat()
+                        items.append({"n": name, "title": title,
+                                      "size": stt.st_size,
+                                      "mtime": int(stt.st_mtime)})
+                    except OSError:
+                        pass
+            self._json(200, {"id": job_id, "step": job["step"],
+                             "status": job["status"], "items": items})
             return
 
         if path == "/api/job":
