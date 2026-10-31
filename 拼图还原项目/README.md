@@ -91,4 +91,14 @@ python src/angle_match.py --pieces out5/pieces_scaled.json --out out5 --tol-deg 
 - 依赖拍摄条件：纸片与背景色差明显、边缘无阴影遮挡。
 
 ---
-*HTML 网页版（拍照即拼）为独立交付物，不在本压缩包内。*
+## 8. 网页版（局域网 · 手机扫码即用）
+
+`web/` 目录里是「拍照即拼」的网页版：手机扫码打开 → 上传照片 → 服务器跑完整条流水线 → 直接返回**拼好的成品图**（按解出的位姿把真实像素贴回，不是几何色块）。
+
+```bash
+python web/server.py --port 8000      # 或双击 web/start.bat
+```
+
+终端会打印局域网地址和二维码，手机连同一个 Wi-Fi 扫码即可。
+
+详细说明（页面用法、接口、拍照要求、踩坑记录）见 [`web/README.md`](web/README.md)。
