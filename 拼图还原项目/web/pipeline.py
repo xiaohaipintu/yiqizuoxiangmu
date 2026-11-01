@@ -1259,6 +1259,14 @@ def solve(
         "has_labels": bool(upload_labels),
         "files": [p.name for p in sorted(out.iterdir()) if p.is_file()],
     }
+    # 7) 曲线边 + 纹理连续性分析（新增维度，只做度量与提示，不改变最终拼法）
+    try:
+        import curve_texture
+        curve_texture.analyze(out, result)
+        step("curve", "曲线边 + 纹理连续性分析完成")
+    except Exception as exc:
+        result["curve_texture_error"] = str(exc)
+
     (out / "result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
     )
