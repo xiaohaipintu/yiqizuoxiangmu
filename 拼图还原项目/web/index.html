@@ -788,5 +788,34 @@
   $('btn-pause').addEventListener('click', pauseJob);
 })();
 </script>
+
+<!-- 任务列表入口：后台任务在跑，关掉页面也能回来查看 -->
+<a id="jobs-link" href="jobs" title="查看后台任务 / 历史结果"
+   style="position:fixed;left:14px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:2147482000;
+          display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:999px;
+          background:#1e293b;border:1px solid #334155;color:#e2e8f0;font:600 .82rem/1 system-ui,"Microsoft YaHei",sans-serif;
+          text-decoration:none;box-shadow:0 8px 22px rgba(2,6,23,.45);">
+  <span>📋 任务列表</span><span id="jobs-badge" style="font-weight:500;color:#94a3b8;"></span>
+</a>
+<script>
+(function () {
+  var badge = document.getElementById('jobs-badge');
+  if (!badge) return;
+  function refresh() {
+    fetch('api/jobs?limit=20')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var items = d.items || [];
+        var running = items.filter(function (x) { return x.status === 'running' || x.status === 'queued'; }).length;
+        var total = d.count || items.length;
+        badge.textContent = running ? ('· ' + running + ' 个在算') : (total ? ('· ' + total) : '');
+        badge.style.color = running ? '#7dd3fc' : '#94a3b8';
+      })
+      .catch(function () { /* 忽略 */ });
+  }
+  refresh();
+  setInterval(refresh, 15000);
+})();
+</script>
 </body>
 </html>
