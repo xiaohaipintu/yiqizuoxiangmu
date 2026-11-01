@@ -30,8 +30,10 @@ WEB_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(WEB_DIR))
 
 import pipeline  # noqa: E402  (同目录的流水线封装)
+import jobstore  # noqa: E402  (任务状态落盘，页面关掉/服务重启也能查)
 
 INDEX_FILE = WEB_DIR / "index.html"
+JOBS_FILE = WEB_DIR / "jobs.html"
 MAX_UPLOAD = 25 * 1024 * 1024          # 单张照片上限 25MB
 JOB_TTL = 24 * 3600                    # 任务结果（图片）保留 24 小时
 ALLOWED_FILES = {
@@ -156,6 +158,7 @@ def new_job() -> dict:
         for key in [k for k, v in JOBS.items() if now - v["created"] > JOB_TTL]:
             stale = JOBS.pop(key)
             _cleanup(stale)
+    jobstore.save(pipeline.job_root(), job)
     return job
 
 
@@ -188,6 +191,7 @@ def worker() -> None:
                 job["step"] = f"{name} {extra}".strip()
                 job["progress"] = min(95, job["progress"] + 15)
                 job["log"].append(f"[{name}] {extra}")
+                jobstore.save(pipeline.job_root(), job)
 
             result = pipeline.solve(
                 job["upload"], out_dir,
@@ -200,6 +204,7 @@ def worker() -> None:
             job["progress"] = 100
             job["status"] = "done"
             job["step"] = "完成"
+            jobstore.save(pipeline.job_root(), job)
             log_event(f"任务 {job['id']} 完成：{result.get('pieces')} 块，"
                       f"{result.get('steps', {}).get('total')}s，"
                       f"空洞 {result.get('metrics', {}).get('holes_pct')}% / "
@@ -208,6 +213,7 @@ def worker() -> None:
             job["status"] = "cancelled"
             job["step"] = "已暂停"
             job["log"].append("[pause] 用户暂停，已停止后续步骤")
+            jobstore.save(pipeline.job_root(), job)
             log_event(f"任务 {job['id']} 被用户暂停")
             _cleanup(job)
         except Exception as exc:
@@ -225,6 +231,7 @@ def worker() -> None:
                              f"任务 {job['id']} 失败 =====\n{tb}\n")
             except Exception:
                 pass
+            jobstore.save(pipeline.job_root(), job)
             log_event(f"任务 {job['id']} 失败：{exc}")
         finally:
             WORKER_LOCK.release()
@@ -271,6 +278,13 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         q = self._query()
 
+        if path in ("/jobs", "/jobs.html"):
+            if not JOBS_FILE.exists():
+                self._send(500, b"jobs.html missing", "text/plain; charset=utf-8")
+                return
+            self._send(200, JOBS_FILE.read_bytes(), "text/html; charset=utf-8")
+            return
+
         if path in ("/", "/index.html"):
             if not INDEX_FILE.exists():
                 self._send(500, b"index.html missing", "text/plain; charset=utf-8")
@@ -313,22 +327,50 @@ class Handler(BaseHTTPRequestHandler):
                              "status": job["status"], "items": items})
             return
 
+        if path == "/api/jobs":
+            try:
+                limit = int(q.get("limit") or 60)
+            except ValueError:
+                limit = 60
+            items = []
+            for j in jobstore.list_jobs(pipeline.job_root(), limit=limit):
+                with JOBS_LOCK:
+                    live = JOBS.get(j["id"])
+                src = live or j                     # 内存里有就用内存的（更新鲜）
+                items.append({
+                    "id": j["id"],
+                    "status": src.get("status"),
+                    "step": src.get("step"),
+                    "progress": src.get("progress"),
+                    "error": src.get("error"),
+                    "created": src.get("created") or j.get("created"),
+                    "updated": j.get("updated"),
+                    "thumbnail": j.get("thumbnail"),
+                    "summary": jobstore.summarize(src),
+                })
+            self._json(200, {"items": items, "count": len(items)})
+            return
+
         if path == "/api/job":
             job_id = q.get("id", "")
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
+            if not job:                              # 进程重启过 → 从 job.json 读
+                job = jobstore.load(pipeline.job_root(), job_id)
             if not job:
                 self._json(404, {"error": "任务不存在或已过期"})
                 return
             self._json(200, {
-                "id": job["id"],
-                "status": job["status"],
-                "step": job["step"],
-                "progress": job["progress"],
-                "error": job["error"],
-                "log": job["log"][-12:],
-                "result": job["result"],
+                "id": job.get("id", job_id),
+                "status": job.get("status"),
+                "step": job.get("step"),
+                "progress": job.get("progress"),
+                "error": job.get("error"),
+                # 重启后从 job.json 读回来的任务没有 log 字段，用 run.log 兜底
+                "log": (job.get("log") or [])[-12:],
+                "result": job.get("result"),
                 "cancelled": job.get("cancelled", False),
+                "from_disk": "dir" not in job,
             })
             return
 

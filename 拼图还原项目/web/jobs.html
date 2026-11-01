@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f172a" />
+<title>拼图还原 · 任务列表</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f172a; --panel: #1e293b; --line: #334155;
+    --text: #e2e8f0; --dim: #94a3b8;
+    --accent1: #38bdf8; --accent2: #6366f1;
+    --ok: #34d399; --err: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 700px at 50% -15%, #1e293b 0%, var(--bg) 62%) fixed;
+    color: var(--text);
+    padding: calc(12px + env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 {
+    margin: 0; flex: 1; font-size: clamp(1.1rem, 4.6vw, 1.5rem); letter-spacing: .04em;
+    background: linear-gradient(120deg, var(--accent1), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 38px; padding: 0 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font: inherit; font-size: .84rem; text-decoration: none; cursor: pointer;
+  }
+  .btn.primary { border-color: transparent; background: linear-gradient(150deg, var(--accent1), var(--accent2)); color: #fff; font-weight: 600; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .hint { font-size: .74rem; color: var(--dim); }
+
+  .job {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 10px; margin-bottom: 10px; display: flex; gap: 10px; align-items: flex-start;
+  }
+  .job .thumb {
+    width: 92px; height: 92px; flex: 0 0 92px; border-radius: 10px;
+    object-fit: cover; background: #0b1220; border: 1px solid var(--line);
+  }
+  .job .main { flex: 1; min-width: 0; }
+  .job .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    font-size: .7rem; padding: 2px 8px; border-radius: 999px; font-weight: 600;
+    border: 1px solid transparent;
+  }
+  .badge.running { background: rgba(56,189,248,.15); color: #7dd3fc; border-color: rgba(56,189,248,.4); }
+  .badge.done { background: rgba(52,211,153,.15); color: var(--ok); border-color: rgba(52,211,153,.4); }
+  .badge.error { background: rgba(248,113,113,.15); color: var(--err); border-color: rgba(248,113,113,.4); }
+  .badge.queued { background: rgba(148,163,184,.15); color: var(--dim); border-color: var(--line); }
+  .badge.cancelled { background: rgba(251,191,36,.15); color: var(--warn); border-color: rgba(251,191,36,.4); }
+  .job .step { font-size: .8rem; color: var(--dim); margin-top: 4px; word-break: break-all; }
+  .job .prog { height: 6px; border-radius: 999px; background: #0b1220; overflow: hidden; margin-top: 6px; }
+  .job .prog span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent1), var(--accent2)); transition: width .4s ease; }
+  .job .meta { font-size: .72rem; color: #64748b; margin-top: 6px; line-height: 1.6; }
+  .job .meta b { color: var(--text); font-weight: 600; }
+  .job .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .job .acts .btn { min-height: 30px; font-size: .76rem; padding: 0 10px; }
+  .err { color: var(--err); font-size: .74rem; margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+
+  .detail { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+  .files { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  .files a { display: block; text-decoration: none; color: var(--dim); font-size: .68rem; }
+  .files img { width: 100%; border-radius: 8px; background: #fff; border: 1px solid var(--line); display: block; }
+  .empty { text-align: center; color: var(--dim); padding: 40px 0; font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>拼图还原 · 任务列表</h1>
+    <a class="btn primary" href=".">＋ 新上传</a>
+  </header>
+
+  <div class="bar">
+    <span class="hint" id="hint">加载中…</span>
+    <span style="flex:1"></span>
+    <label class="hint" style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+      <input id="auto" type="checkbox" checked> 自动刷新
+    </label>
+    <button class="btn" id="refresh">刷新</button>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var listEl = $('list');
+  var hintEl = $('hint');
+  var openDetail = {};      // jobId -> bool（展开状态在刷新间保持）
+
+  function fmtTime(ts) {
+    if (!ts) return '-';
+    var d = new Date(ts * 1000);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function ago(ts) {
+    if (!ts) return '';
+    var s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 60) return Math.floor(s) + ' 秒前';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    return Math.floor(s / 86400) + ' 天前';
+  }
+  var STATUS_TEXT = { queued: '排队', running: '计算中', done: '完成', error: '失败', cancelled: '已暂停' };
+
+  function fileUrl(id, name, bust) {
+    return 'api/file?id=' + encodeURIComponent(id) + '&n=' + encodeURIComponent(name) +
+           '&t=' + encodeURIComponent(bust || '');
+  }
+
+  function card(j) {
+    var s = j.summary || {};
+    var st = j.status || 'queued';
+    var thumb = j.thumbnail
+      ? '<img class="thumb" loading="lazy" src="' + fileUrl(j.id, j.thumbnail, j.updated) + '" alt="">'
+      : '<div class="thumb"></div>';
+    var metrics = [];
+    if (s.pieces !== undefined && s.pieces !== null) metrics.push('碎片 <b>' + s.pieces + '</b>');
+    if (s.holes_pct !== undefined && s.holes_pct !== null) metrics.push('空洞 <b>' + s.holes_pct + '%</b>');
+    if (s.overlap_pct !== undefined && s.overlap_pct !== null) metrics.push('重叠 <b>' + s.overlap_pct + '%</b>');
+    if (s.total_s) metrics.push('耗时 <b>' + s.total_s + 's</b>');
+    if (s.texture_mean_dE !== undefined && s.texture_mean_dE !== null) metrics.push('纹理 ΔE <b>' + s.texture_mean_dE + '</b>');
+
+    var acts = '';
+    if (st === 'running' || st === 'queued') {
+      acts += '<span class="hint">服务器后台计算中，可以直接关掉本页</span>';
+    }
+    if (st === 'done') {
+      acts += '<a class="btn" target="_blank" rel="noopener" href="' + fileUrl(j.id, 'assembled.jpg') + '">成品图</a>';
+      acts += '<a class="btn" target="_blank" rel="noopener" href="' + fileUrl(j.id, 'assembled_labels.jpg') + '">带名称</a>';
+      acts += '<a class="btn" id="dt-' + j.id + '" href="#">详情</a>';
+    }
+    if (st === 'error' || st === 'cancelled') {
+      acts += '<a class="btn" id="dt-' + j.id + '" href="#">详情</a>';
+    }
+
+    return '<div class="job" data-id="' + j.id + '">' + thumb +
+      '<div class="main">' +
+      '<div class="top"><span class="badge ' + st + '">' + (STATUS_TEXT[st] || st) + '</span>' +
+      '<span class="hint">' + fmtTime(j.created) + ' · ' + ago(j.created) + '</span>' +
+      '<span class="hint" style="margin-left:auto;font-family:ui-monospace,monospace;">' + j.id + '</span></div>' +
+      '<div class="step">' + (j.step || '') + '</div>' +
+      '<div class="prog"><span style="width:' + (j.progress || 0) + '%"></span></div>' +
+      (metrics.length ? '<div class="meta">' + metrics.join(' · ') + '</div>' : '') +
+      (j.error ? '<div class="err">' + String(j.error).slice(0, 300) + '</div>' : '') +
+      '<div class="acts">' + acts + '</div>' +
+      '<div class="detail" id="detail-' + j.id + '" hidden></div>' +
+      '</div></div>';
+  }
+
+  function render(items) {
+    if (!items.length) {
+      listEl.innerHTML = '<div class="empty">还没有任务，点右上「＋ 新上传」开始</div>';
+      return;
+    }
+    listEl.innerHTML = items.map(card).join('');
+    // 恢复展开状态
+    Object.keys(openDetail).forEach(function (id) {
+      if (openDetail[id]) showDetail(id);
+    });
+  }
+
+  function showDetail(id) {
+    var box = document.getElementById('detail-' + id);
+    if (!box) return;
+    box.hidden = false;
+    openDetail[id] = true;
+    box.innerHTML = '加载中…';
+    fetch('api/job?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (job) {
+        var r = job.result || {};
+        var files = (r.files || []).filter(function (n) { return /\.(jpg|png)$/i.test(n); });
+        var html = '<div class="meta">状态：' + (STATUS_TEXT[job.status] || job.status) +
+          (r.ranking && r.ranking.chosen ? ' · 选中 ' + r.ranking.chosen : '') +
+          (r.ranking && r.ranking.mean_len_diff_pct !== undefined
+            ? ' · 对接边长差 ' + r.ranking.mean_len_diff_pct + '%' : '') + '</div>';
+        if (r.joints && r.joints.length) {
+          html += '<div class="meta">接缝：' + r.joints.map(function (j) {
+            return j.a + '↔' + j.b + (j.texture_dE !== undefined && j.texture_dE !== null ? ' (ΔE ' + j.texture_dE + ')' : '');
+          }).join('、') + '</div>';
+        }
+        if (files.length) {
+          html += '<div class="files">' + files.map(function (n) {
+            return '<a target="_blank" rel="noopener" href="' + fileUrl(id, n) + '">' +
+              '<img loading="lazy" src="' + fileUrl(id, n) + '" alt="' + n + '">' + n + '</a>';
+          }).join('') + '</div>';
+        }
+        html += '<div class="acts"><a class="btn" target="_blank" rel="noopener" href="api/file?id=' +
+          encodeURIComponent(id) + '&n=run.log">运行日志</a>' +
+          '<a class="btn" target="_blank" rel="noopener" href="api/file?id=' +
+          encodeURIComponent(id) + '&n=result.json">result.json</a></div>';
+        box.innerHTML = html;
+      })
+      .catch(function (e) { box.innerHTML = '<div class="err">详情加载失败：' + e.message + '</div>'; });
+  }
+
+  listEl.addEventListener('click', function (e) {
+    var a = e.target.closest('a[id^="dt-"]');
+    if (!a) return;
+    e.preventDefault();
+    var id = a.id.slice(3);
+    var box = document.getElementById('detail-' + id);
+    if (!box) return;
+    if (box.hidden) { showDetail(id); }
+    else { box.hidden = true; openDetail[id] = false; }
+  });
+
+  var timer = null;
+  function load() {
+    fetch('api/jobs')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        render(d.items || []);
+        var running = (d.items || []).filter(function (x) { return x.status === 'running' || x.status === 'queued'; }).length;
+        hintEl.textContent = '共 ' + (d.count || 0) + ' 个任务' + (running ? '，' + running + ' 个在算' : '') +
+          ' · 更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      })
+      .catch(function (e) { hintEl.textContent = '加载失败：' + e.message; });
+  }
+
+  function restart() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if ($('auto').checked) timer = setInterval(load, 3000);
+  }
+
+  $('refresh').addEventListener('click', load);
+  $('auto').addEventListener('change', restart);
+  load();
+  restart();
+})();
+</script>
+</body>
+</html>
