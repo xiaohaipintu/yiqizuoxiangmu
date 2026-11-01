@@ -145,8 +145,11 @@ def edge_metrics(poly, mask: np.ndarray, max_dev: float | None = None) -> list:
         ratio = arc / chord if chord > 1e-6 else 1.0
         radius = (chord * chord) / (8.0 * bulge) if bulge > 1e-6 else None
         bulge_pct = bulge / chord * 100.0 if chord > 1e-6 else 0.0
-        # 手裁纸边本身有 0.5~2% 的波浪，所以按「占弦长百分比」判定，别用绝对像素
-        curved = (bulge_pct >= 0.8) or (ratio >= 1.015)
+        # 判「曲线边」要保守：凹陷得够大（≥3px），并且要么占比 ≥2%，
+        # 要么弯曲半径 ≤ 1 个弦长（真的是弧）。否则量到的只是「多边形没贴合轮廓」的误差。
+        curved = bool(bulge >= 3.0 and (
+            bulge_pct >= 2.0
+            or (radius is not None and radius <= chord)))
         out.append({
             "index": k,
             "chord": round(chord, 2),
