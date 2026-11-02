@@ -572,10 +572,12 @@
 
     fetch('api/solve', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'X-Concave': concave
-      },
+      headers: (function () {
+        var h = { 'Content-Type': 'image/jpeg', 'X-Concave': concave };
+        var bg = (typeof window.__jigsawBg === 'function') ? window.__jigsawBg() : '';
+        if (bg) h['X-Bg-Color'] = bg;        // 空 = 自动；'off' = 无纯色背景；其它 = RRGGBB
+        return h;
+      })(),
       body: blob
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -815,6 +817,48 @@
   }
   refresh();
   setInterval(refresh, 15000);
+})();
+</script>
+
+<!-- 背景色：默认自动（从画面四边估），可用吸管手动指定 -->
+<div id="bg-color-wrap" style="position:fixed;left:14px;bottom:calc(64px + env(safe-area-inset-bottom));
+     z-index:2147481900;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:10px;
+     background:rgba(30,41,59,.92);border:1px solid #334155;color:#e2e8f0;
+     font:500 .76rem/1.2 system-ui,'Microsoft YaHei',sans-serif;box-shadow:0 8px 22px rgba(2,6,23,.4);">
+  <span>背景色</span>
+  <select id="bg-mode" style="background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:6px;padding:3px 4px;font:inherit;">
+    <option value="auto">自动识别</option>
+    <option value="manual">手动指定</option>
+  </select>
+  <input id="bg-color" type="color" value="#00b140" disabled
+         style="width:30px;height:24px;padding:0;border:1px solid #475569;border-radius:6px;background:#0b1220;opacity:.45;">
+</div>
+<script>
+(function () {
+  var mode = document.getElementById('bg-mode');
+  var pick = document.getElementById('bg-color');
+  var wrap = document.getElementById('bg-color-wrap');
+  if (!mode || !pick) return;
+  // 记住上次选择（同一台设备下次打开还在）
+  try {
+    var saved = JSON.parse(localStorage.getItem('jigsaw-bg') || '{}');
+    if (saved.mode) mode.value = saved.mode;
+    if (saved.color) pick.value = saved.color;
+  } catch (e) {}
+  function sync() {
+    pick.disabled = mode.value !== 'manual';
+    pick.style.opacity = pick.disabled ? '.45' : '1';
+    wrap.style.borderColor = mode.value === 'manual' ? '#38bdf8' : '#334155';
+    try { localStorage.setItem('jigsaw-bg', JSON.stringify({ mode: mode.value, color: pick.value })); } catch (e) {}
+  }
+  mode.addEventListener('change', sync);
+  pick.addEventListener('change', sync);
+  sync();
+  // 暴露给提交逻辑
+  window.__jigsawBg = function () {
+    if (mode.value === 'manual') return pick.value.replace('#', '');
+    return '';                                      // 空 = 自动
+  };
 })();
 </script>
 </body>

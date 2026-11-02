@@ -149,6 +149,7 @@ def new_job() -> dict:
         "result": None,
         "error": None,
         "cancelled": False,          # 用户点了「暂停」，worker 在步骤边界停手
+        "bg": None,                  # 背景色：None=自动估；'RRGGBB'=手动指定
         "dir": str(pipeline.job_root() / job_id),
     }
     with JOBS_LOCK:
@@ -197,6 +198,7 @@ def worker() -> None:
                 job["upload"], out_dir,
                 beam_time=job["beam_time"],
                 concave=job["concave"],
+                bg_color=job.get("bg"),
                 log=log,
                 should_cancel=lambda: job.get("cancelled", False),
             )
@@ -456,9 +458,16 @@ class Handler(BaseHTTPRequestHandler):
         job["upload"] = str(upload_path)
         job["beam_time"] = None          # 自动：按碎片数给预算，不够吻合自己加时
         job["concave"] = (self.headers.get("X-Concave") or "1") != "0"
+        # 背景色：不传 = 自动从画面四边估；传 6 位 hex = 手动指定
+        bg = (self.headers.get("X-Bg-Color") or "").strip().lstrip("#")
+        if bg and (len(bg) != 6 or any(c not in "0123456789abcdefABCDEF" for c in bg)):
+            bg = ""
+        job["bg"] = bg or None
         JOB_QUEUE.put(job["id"])
-        print(f"[任务 {job['id']}] 收到 {length // 1024}KB 图片，concave={job['concave']}")
-        log_event(f"任务 {job['id']} 收到 {length // 1024}KB 图片 concave={job['concave']}")
+        print(f"[任务 {job['id']}] 收到 {length // 1024}KB 图片，"
+              f"concave={job['concave']} bg={job['bg'] or 'auto'}")
+        log_event(f"任务 {job['id']} 收到 {length // 1024}KB 图片 concave={job['concave']} "
+                  f"bg={job['bg'] or 'auto'}")
         self._json(200, {"id": job["id"]})
 
 

@@ -66,11 +66,37 @@ def auto_mask(bgr: np.ndarray, delta_e: float = 40.0) -> np.ndarray:
     return mask
 
 
-def is_green_screen(bg: np.ndarray) -> bool:
-    """背景是不是绿幕：HSV 色相落在绿色段且饱和度够高。"""
+def parse_bg(value: str):
+    """把 00B140 / #00B140 / 0,177,64(已是 BGR) 解析成 np.uint8 BGR。"""
+    v = str(value).strip().lstrip('#')
+    try:
+        if ',' in v:
+            parts = [int(x) for x in v.split(',')]
+            return np.array(parts, dtype=np.uint8) if len(parts) == 3 else None
+        if len(v) == 6:
+            r, g, b = int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+            return np.array([b, g, r], dtype=np.uint8)
+    except ValueError:
+        return None
+    return None
+
+
+def is_chroma_bg(bg: np.ndarray) -> bool:
+    """背景色是否适合**色度键控**（chroma key）——不限绿。
+
+    判据：颜色够"艳"（Lab 色度幅度够大 + HSV 饱和度够高 + 不太暗）。
+    蓝布、黄纸、青色卡纸都满足；白墙/灰地不满足（那类走 Lab 全量 ΔE）。
+    """
+    lab = cv2.cvtColor(bg.reshape(1, 1, 3), cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+    chroma = float(np.hypot(lab[1] - 128.0, lab[2] - 128.0))
     hsv = cv2.cvtColor(bg.reshape(1, 1, 3), cv2.COLOR_BGR2HSV)[0, 0]
-    hue, sat, val = float(hsv[0]), float(hsv[1]), float(hsv[2])
-    return 40.0 <= hue <= 85.0 and sat >= 90.0 and val >= 40.0
+    sat, val = float(hsv[1]), float(hsv[2])
+    return chroma >= 22.0 and sat >= 80.0 and val >= 35.0
+
+
+def is_green_screen(bg: np.ndarray) -> bool:
+    """兼容旧调用（老名字）。现在只要背景够饱和就返回 True。"""
+    return is_chroma_bg(bg)
 
 
 def chroma_delta(bgr: np.ndarray, bg: np.ndarray) -> np.ndarray:
@@ -95,16 +121,25 @@ def chroma_alpha(bgr: np.ndarray, bg: np.ndarray, lo: float = 10.0, hi: float = 
     return (np.clip(a, 0.0, 1.0) * 255).astype(np.uint8)
 
 
-def despill(bgr: np.ndarray, strength: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
-    """压掉绿色溢出（despill）。
+def despill(bgr: np.ndarray, strength: float = 1.0,
+            bg: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """压掉**背景色**溢出（despill）——不再假定是绿。
 
-    绿幕反光会在纸片边缘染一层绿（G 明显高于 R/B）。经典做法：把 G 压到不超过
-    max(R, B)，其余通道不动 —— 颜色更正，又不会破坏亮度结构。
+    背景反光会往纸片边缘染一层背景色。做法：把背景最强的那个通道压到不超过
+    另外两个通道的最大值，其余通道不动 —— 颜色更正，又不破坏亮度结构。
+
+    bg=None 时保持老行为（压绿）。
     """
     out = bgr.astype(np.float32)
-    green = out[..., 1]
-    excess = np.clip(green - np.maximum(out[..., 0], out[..., 2]), 0.0, None) * strength
-    out[..., 1] = green - excess
+    if bg is None:
+        ch = 1                                    # 老行为：绿
+    else:
+        ch = int(np.argmax(np.asarray(bg, dtype=np.float32)))
+    others = [c for c in range(3) if c != ch]
+    spill_ch = out[..., ch]
+    excess = np.clip(spill_ch - np.maximum(out[..., others[0]], out[..., others[1]]),
+                     0.0, None) * strength
+    out[..., ch] = spill_ch - excess
     return np.clip(out, 0, 255).astype(np.uint8), excess
 
 
@@ -319,6 +354,8 @@ def main() -> int:
                     help="色度软边下限（alpha 开始大于 0）")
     ap.add_argument("--chroma-hi", type=float, default=22.0,
                     help="色度软边上限（alpha 到达 255）")
+    ap.add_argument("--bg", default=None,
+                    help="背景色：默认从画面四边自动估；也可写 00B140 / #00B140 / 0,177,64(BGR)")
     ap.add_argument("--concave", action="store_true",
                     help="碎片本身是凹多边形（有凹槽），沿真实轮廓拟合而不是凸包")
     args = ap.parse_args()
@@ -337,14 +374,20 @@ def main() -> int:
     bg = None
     if args.mode in ("auto", "chroma"):
         delta, bg = background_delta(bgr)
+        if args.bg:
+            manual = parse_bg(args.bg)
+            if manual is not None:
+                bg = manual
+                delta, _ = background_delta(bgr)
+                print("背景色 手动指定 BGR %s（自动估的是 %s）" % (bg.tolist(), _ .tolist()))
         print("背景色 BGR %s" % bg.tolist())
         if args.mode == "chroma":
             use_chroma = True
         else:
             use_chroma = is_green_screen(bg)
         print("抠像方式：" + (
-            "绿幕色度抠像（只用 Lab 的 a/b，忽略亮度 → 阴影/光照不均不会误判为前景）"
-            if use_chroma else "Lab 全量 ΔE（背景不是绿幕）"))
+            "色度抠像（只用 Lab 的 a/b，忽略亮度 → 阴影/光照不均不会误判为前景）"
+            if use_chroma else "Lab 全量 ΔE（背景饱和度低，按整体色差分割）"))
 
     if args.mode == "red":
         mask = red_mask(bgr)
@@ -367,7 +410,7 @@ def main() -> int:
     cv2.imwrite(str(outdir / "01_alpha.png"), alpha)
 
     # despill：绿幕反光会把背景绿打到纸片边缘，压掉 G 溢出，成品才不会带绿罩
-    despilled, spill = despill(bgr)
+    despilled, spill = despill(bgr, bg=bg if bg is not None else None)
     # 只在有前景的地方改色：背景本来 G 就最高，全域压下去会让整张图发灰
     keep = cv2.dilate(alpha, np.ones((3, 3), np.uint8)) > 0
     despilled = np.where(keep[..., None], despilled, bgr).astype(np.uint8)

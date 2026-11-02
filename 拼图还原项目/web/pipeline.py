@@ -99,6 +99,23 @@ def write_image(path: str | Path, img: np.ndarray, quality: int = 92) -> None:
 _ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
+def _hex_to_bgr(value):
+    """把 "00B140" / "#00B140" / "0,177,64"(已是 BGR) 解析成 np.uint8 BGR 数组。"""
+    if not value:
+        return None
+    v = str(value).strip().lstrip("#")
+    try:
+        if "," in v:
+            parts = [int(x) for x in v.split(",")]
+            return np.array(parts, dtype=np.uint8) if len(parts) == 3 else None
+        if len(v) == 6:
+            r, g, b = int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+            return np.array([b, g, r], dtype=np.uint8)
+    except ValueError:
+        return None
+    return None
+
+
 def piece_name(index: int) -> str:
     """0 → A, 25 → Z, 26 → AA …（按 pieces.json 里的顺序）"""
     out = ""
@@ -868,6 +885,7 @@ def solve(
     out_dir: str | Path,
     beam_time: float | None = None,
     concave: bool = True,
+    bg_color: str | None = None,
     log=None,
     should_cancel=None,
 ) -> dict:
@@ -920,6 +938,8 @@ def solve(
     seg_args = ["--image", image_path, "--out", out]
     if concave:
         seg_args.append("--concave")
+    if bg_color:                       # 手动指定背景色（自动估不准时用）
+        seg_args += ["--bg", bg_color]
     _run("segment.py", seg_args, timeout=180, log=step, steps=steps,
          logs_dir=logs)
     pieces_json = out / "pieces.json"
@@ -933,7 +953,8 @@ def solve(
     try:
         import resegment                      # 同目录模块，延迟导入避免循环依赖
         key_info = resegment.refine_pieces(
-            image_path, pieces_json, pieces_json, alpha_png, keyed_img
+            image_path, pieces_json, pieces_json, alpha_png, keyed_img,
+            bg_hint=_hex_to_bgr(bg_color),
         )
         detail = "、".join(f"{c['piece']} {c['vertices']}" for c in key_info.get("changes", []))
         step("key", f"绿幕抠图重测 {key_info.get('found')} 块：{detail or '无变化'}")
@@ -1281,6 +1302,8 @@ def main() -> int:
     ap.add_argument("--time", type=float, default=None,
                     help="束搜索时间预算（秒）。不给就按碎片数自动决定，不够吻合会自动加时")
     ap.add_argument("--no-concave", action="store_true", help="关闭凹形拟合")
+    ap.add_argument("--bg", default=None,
+                    help="背景色：默认自动估；也可写 00B140 / #00B140 / 0,177,64(BGR)")
     args = ap.parse_args()
 
     def log(name, extra=""):
@@ -1295,6 +1318,7 @@ def main() -> int:
         args.image, out_dir,
         beam_time=args.time,
         concave=not args.no_concave,
+        bg_color=args.bg,
         log=log,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -41,10 +41,11 @@ SCAN_STEP = 0.35
 # --------------------------------------------------------------------------
 # 1) 绿幕键控 → 软 alpha
 # --------------------------------------------------------------------------
-def key_matte(img: np.ndarray):
+def key_matte(img: np.ndarray, bg_hint: np.ndarray | None = None):
     """色度键控：alpha = 该像素色度差 / 纸片与背景的色度差 = 颜色混合比例。
 
     alpha=0.5 恰好对应「纸片占半个像素」，也就是真实边界 —— 这是把边长抠准的关键。
+    bg_hint：手动指定的背景色（BGR）。碎片顶到画面四边、边框中位数估不准时用。
     """
     ycc = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb).astype(np.float32)
     h, w = ycc.shape[:2]
@@ -54,6 +55,9 @@ def key_matte(img: np.ndarray):
         ycc[:, :band].reshape(-1, 3), ycc[:, -band:].reshape(-1, 3),
     ])
     bg = np.median(border, axis=0)                        # (Y, Cr, Cb)
+    if bg_hint is not None:
+        hint = np.asarray(bg_hint, dtype=np.uint8).reshape(1, 1, 3)
+        bg = cv2.cvtColor(hint, cv2.COLOR_BGR2YCrCb)[0, 0].astype(np.float32)
     d = np.sqrt((ycc[:, :, 1] - bg[1]) ** 2 + (ycc[:, :, 2] - bg[2]) ** 2)
     # 纸片本色：色度差最大的那一小撮像素的中位数（≈ 纯纸片）
     if d.max() <= 1e-6:
@@ -65,13 +69,22 @@ def key_matte(img: np.ndarray):
     return alpha, bg, d_piece
 
 
-def despill(img: np.ndarray, alpha: np.ndarray) -> np.ndarray:
-    """去掉边缘残留的绿：G 不超过 max(R,B)。内部（alpha≈1）基本不受影响。"""
+def despill(img: np.ndarray, alpha: np.ndarray,
+            bg_hint: np.ndarray | None = None) -> np.ndarray:
+    """去掉边缘残留的**背景色**：背景主通道压到不超过另外两通道最大值。
+
+    蓝布压 B、绿布压 G、黄纸压 B 或 G（取背景里最强的那个通道）。
+    内部（alpha≈1）基本不受影响，只在边缘（alpha<1）压。
+    """
     out = img.astype(np.float32)
-    b, g, r = out[:, :, 0], out[:, :, 1], out[:, :, 2]
-    limit = np.maximum(r, b)
-    excess = np.clip(g - limit, 0, None) * (1.0 - alpha)       # 边缘才压
-    out[:, :, 1] = g - excess
+    if bg_hint is None:
+        bg_channel = 1                                        # 老行为：绿
+    else:
+        bg_channel = int(np.argmax(np.asarray(bg_hint, dtype=np.float32)))
+    others = [c for c in range(3) if c != bg_channel]
+    limit = np.maximum(out[:, :, others[0]], out[:, :, others[1]])
+    excess = np.clip(out[:, :, bg_channel] - limit, 0, None) * (1.0 - alpha)
+    out[:, :, bg_channel] -= excess
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
@@ -167,9 +180,9 @@ def refine_contour(alpha: np.ndarray, cnt: np.ndarray, eps_ratio: float = 0.008)
 # --------------------------------------------------------------------------
 def refine_pieces(image_path: Path, pieces_json: Path, out_json: Path,
                   alpha_out: Path | None = None, keyed_out: Path | None = None,
-                  tol_angle: float = 8.0) -> dict:
+                  tol_angle: float = 8.0, bg_hint: np.ndarray | None = None) -> dict:
     img = P.read_image(image_path)
-    alpha, _bg, _dp = key_matte(img)
+    alpha, _bg, _dp = key_matte(img, bg_hint)
     hard = (alpha >= 0.5).astype(np.uint8) * 255
     hard = cv2.morphologyEx(hard, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     cnts, _ = cv2.findContours(hard, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -218,7 +231,7 @@ def refine_pieces(image_path: Path, pieces_json: Path, out_json: Path,
     if alpha_out:
         P.write_image(alpha_out, (alpha * 255).astype(np.uint8))
     if keyed_out:
-        P.write_image(keyed_out, despill(img, alpha), quality=92)
+        P.write_image(keyed_out, despill(img, alpha, bg_hint), quality=92)
     return report
 
 
