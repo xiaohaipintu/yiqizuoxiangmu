@@ -323,6 +323,7 @@
 
       <div style="display:flex;gap:8px;margin-top:12px;">
         <a class="btn primary" id="btn-download" style="flex:1;text-decoration:none;" download="拼好的图.jpg">保存拼好的图</a>
+        <a class="btn" id="btn-result-page" style="flex:1;text-decoration:none;" href="#">结果页</a>
         <button class="btn" id="btn-again" style="flex:1;">再来一张</button>
       </div>
     </div>
@@ -665,6 +666,8 @@
     var suf = showLabels ? '_labels' : '';
     $('img-upload').src = base + 'upload' + suf + '.jpg';
     $('img-assembled').src = base + 'assembled' + suf + '.jpg';
+    var rp = $('btn-result-page');
+    if (rp && currentJobId) rp.href = 'result?id=' + encodeURIComponent(currentJobId);
     var dl = $('btn-download');
     dl.href = base + 'assembled' + suf + '.jpg';
     dl.download = '拼好的图' + (showLabels ? '-带名称' : '') + '.jpg';
@@ -859,6 +862,55 @@
     if (mode.value === 'manual') return pick.value.replace('#', '');
     return '';                                      // 空 = 自动
   };
+})();
+</script>
+
+<!-- 全屏看图（点结果图打开，可下载） -->
+<div id="lb-overlay" style="position:fixed;inset:0;z-index:2147483100;background:rgba(2,6,23,.96);
+     display:none;flex-direction:column;">
+  <div style="display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 10px 8px;">
+    <span id="lb-title" style="flex:1;color:#94a3b8;font:500 .8rem/1.3 system-ui;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    <a id="lb-download" class="lb-btn" download style="text-decoration:none;padding:8px 12px;border-radius:9px;background:linear-gradient(150deg,#38bdf8,#6366f1);color:#fff;font:600 .8rem/1 system-ui;">下载</a>
+    <button id="lb-close" class="lb-btn" style="padding:8px 12px;border-radius:9px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font:600 .8rem/1 system-ui;cursor:pointer;">关闭</button>
+  </div>
+  <div id="lb-stage" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:4px;">
+    <img id="lb-img" alt="" style="max-width:100%;max-height:100%;object-fit:contain;">
+  </div>
+</div>
+<script>
+(function () {
+  var ov = document.getElementById('lb-overlay');
+  var img = document.getElementById('lb-img');
+  var title = document.getElementById('lb-title');
+  var dl = document.getElementById('lb-download');
+  if (!ov) return;
+  function open(src, name) {
+    img.src = src;
+    img.style.transform = '';
+    title.textContent = name || '';
+    dl.href = src;
+    dl.setAttribute('download', (name || 'result.jpg').split('/').pop());
+    ov.style.display = 'flex';
+  }
+  function close() { ov.style.display = 'none'; img.removeAttribute('src'); }
+  document.getElementById('lb-close').addEventListener('click', close);
+  ov.addEventListener('click', function (e) {
+    if (e.target.id === 'lb-overlay' || e.target.id === 'lb-stage') close();
+  });
+  img.addEventListener('dblclick', function () {
+    img.style.transform = img.style.transform === 'scale(2)' ? '' : 'scale(2)';
+  });
+  document.addEventListener('keydown', function (e) {
+    if (ov.style.display === 'flex' && e.key === 'Escape') close();
+  });
+  // 结果图 / 候选图，点一下就看大图
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.tagName !== 'IMG') return;
+    if (!t.closest('.result-img, .cand-item, #cand-box, .cands')) return;
+    var name = t.getAttribute('alt') || 'result.jpg';
+    open(t.currentSrc || t.src, name);
+  });
 })();
 </script>
 </body>

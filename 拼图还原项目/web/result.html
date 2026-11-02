@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f172a" />
+<title>拼图结果 · 拍照拼图还原</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f172a; --panel:#1e293b; --line:#334155;
+          --text:#e2e8f0; --dim:#94a3b8; --a1:#38bdf8; --a2:#6366f1;
+          --ok:#34d399; --err:#f87171; --warn:#fbbf24; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; min-height:100vh; background: radial-gradient(1200px 700px at 50% -15%, #1e293b 0%, var(--bg) 62%) fixed;
+         color:var(--text); font-family: system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+         padding: calc(10px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom)); }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  header { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  h1 { margin:0; flex:1; font-size: clamp(1.05rem,4.4vw,1.4rem);
+       background: linear-gradient(120deg,var(--a1),var(--a2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .btn { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:0 14px;
+         border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text);
+         font:inherit; font-size:.84rem; text-decoration:none; cursor:pointer; }
+  .btn.primary { border-color:transparent; background:linear-gradient(150deg,var(--a1),var(--a2)); color:#fff; font-weight:600; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px; }
+  .imgs { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:560px) { .imgs { grid-template-columns:1fr; } }
+  figure { margin:0; }
+  figure img { width:100%; display:block; border-radius:10px; background:#fff; border:1px solid var(--line); cursor:zoom-in; }
+  figcaption { font-size:.76rem; color:var(--dim); text-align:center; margin-top:6px; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  @media (max-width:560px) { .stats { grid-template-columns:repeat(2,1fr); } }
+  .stat { background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:10px 6px; text-align:center; }
+  .stat b { display:block; font-size:1.15rem; }
+  .stat span { font-size:.7rem; color:var(--dim); }
+  .gal { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; }
+  .gal a { display:block; text-decoration:none; color:var(--dim); font-size:.68rem; }
+  .gal img { width:100%; border-radius:8px; background:#fff; border:1px solid var(--line); display:block; cursor:zoom-in; }
+  .muted { color:var(--dim); font-size:.76rem; }
+  .err { color:var(--err); font-size:.8rem; }
+
+  /* 全屏看图 */
+  #lb { position:fixed; inset:0; z-index:2147483000; background:rgba(2,6,23,.96); display:none;
+        flex-direction:column; }
+  #lb.on { display:flex; }
+  #lb .top { display:flex; gap:8px; align-items:center; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
+  #lb .top .name { flex:1; font-size:.8rem; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #lb .stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:4px; }
+  #lb img { max-width:100%; max-height:100%; object-fit:contain; transition:transform .12s ease; }
+  #lb .nav { display:flex; gap:10px; justify-content:center; padding:10px 10px calc(12px + env(safe-area-inset-bottom)); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>拼图结果</h1>
+    <a class="btn" href="jobs">任务列表</a>
+    <a class="btn primary" href=".">再来一张</a>
+  </header>
+
+  <div id="head" class="muted" style="margin-bottom:10px;">加载中…</div>
+  <div id="body"></div>
+</div>
+
+<div id="lb">
+  <div class="top">
+    <span class="name" id="lb-name"></span>
+    <a class="btn" id="lb-dl" download>下载</a>
+    <button class="btn" id="lb-close">关闭</button>
+  </div>
+  <div class="stage"><img id="lb-img" alt="" /></div>
+  <div class="nav">
+    <button class="btn" id="lb-prev">上一张</button>
+    <span class="muted" id="lb-idx" style="align-self:center;"></span>
+    <button class="btn" id="lb-next">下一张</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var params = new URLSearchParams(location.search);
+  var jobId = params.get('id') || '';
+  var gallery = [];          // [{url, name}]
+  var lbIndex = 0;
+
+  function fileUrl(id, name, bust) {
+    return 'api/file?id=' + encodeURIComponent(id) + '&n=' + encodeURIComponent(name) +
+           (bust ? '&t=' + encodeURIComponent(bust) : '');
+  }
+  function fmtTs(ts) {
+    if (!ts) return '-';
+    var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+           p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  /* ---------------- 全屏看图 ---------------- */
+  function openLb(url, name) {
+    gallery = gallery.filter(function (g) { return g.url !== url; });
+    gallery.unshift({ url: url, name: name });
+    lbIndex = 0;
+    showLb();
+    $('lb').classList.add('on');
+  }
+  function showLb() {
+    var g = gallery[lbIndex];
+    if (!g) return;
+    $('lb-img').src = g.url;
+    $('lb-img').style.transform = '';
+    $('lb-name').textContent = g.name;
+    $('lb-idx').textContent = (lbIndex + 1) + ' / ' + gallery.length;
+    var dl = $('lb-dl');
+    dl.href = g.url;
+    dl.setAttribute('download', g.name.split('/').pop());
+  }
+  $('lb-close').addEventListener('click', function () {
+    $('lb').classList.remove('on');
+    $('lb-img').removeAttribute('src');
+  });
+  $('lb-prev').addEventListener('click', function () {
+    if (!gallery.length) return;
+    lbIndex = (lbIndex - 1 + gallery.length) % gallery.length;
+    showLb();
+  });
+  $('lb-next').addEventListener('click', function () {
+    if (!gallery.length) return;
+    lbIndex = (lbIndex + 1) % gallery.length;
+    showLb();
+  });
+  $('lb-img').addEventListener('dblclick', function () {     // 双击放大/还原
+    var cur = $('lb-img').style.transform;
+    $('lb-img').style.transform = cur === 'scale(1.8)' ? '' : 'scale(1.8)';
+  });
+  document.addEventListener('keydown', function (e) {
+    if (!$('lb').classList.contains('on')) return;
+    if (e.key === 'Escape') $('lb').classList.remove('on');
+    if (e.key === 'ArrowLeft') $('lb-prev').click();
+    if (e.key === 'ArrowRight') $('lb-next').click();
+  });
+  // 点遮罩空白处关闭
+  $('lb').addEventListener('click', function (e) {
+    if (e.target.id === 'lb' || e.target.className === 'stage') {
+      $('lb').classList.remove('on');
+    }
+  });
+
+  /* ---------------- 渲染 ---------------- */
+  function figure(id, name, cap, bust) {
+    var url = fileUrl(id, name, bust);
+    gallery.push({ url: url, name: name });
+    return '<figure><img src="' + url + '" data-name="' + name + '" alt="' + cap + '" loading="lazy">' +
+           '<figcaption>' + cap + '</figcaption></figure>';
+  }
+
+  function render(job) {
+    var r = job.result || {};
+    var m = r.metrics || {};
+    var rk = r.ranking || {};
+    var st = job.status;
+
+    $('head').innerHTML = '任务 <b style="font-family:ui-monospace">' + job.id + '</b> · ' +
+      fmtTs(job.created) + ' · 状态 ' + (st === 'done' ? '<span style="color:var(--ok)">完成</span>' :
+        st === 'error' ? '<span style="color:var(--err)">失败</span>' :
+        st === 'cancelled' ? '<span style="color:var(--warn)">已暂停</span>' : '计算中') +
+      (rk.chosen ? ' · 采用 ' + rk.chosen : '') +
+      (rk.mirror_retried ? ' · 用过镜像重搜' : '');
+
+    if (st !== 'done') {
+      $('body').innerHTML = '<div class="card"><div class="muted">当前步骤：' + (job.step || '') + '</div>' +
+        (job.error ? '<div class="err" style="margin-top:8px">' + job.error + '</div>' : '') +
+        '<div class="muted" style="margin-top:8px">还没算完，稍后刷新本页。</div></div>';
+      return;
+    }
+
+    var html = '';
+    html += '<div class="card imgs">' +
+      figure(job.id, 'upload.jpg', '你拍的照片', job.created) +
+      figure(job.id, 'assembled.jpg', '拼好的图', job.updated) +
+      '</div>';
+
+    html += '<div class="card stats">' +
+      '<div class="stat"><b>' + (r.pieces != null ? r.pieces : '-') + '</b><span>碎片数</span></div>' +
+      '<div class="stat"><b style="color:var(--ok)">' + (m.holes_pct != null ? m.holes_pct + '%' : '-') + '</b><span>空洞率</span></div>' +
+      '<div class="stat"><b style="color:var(--a1)">' + (m.overlap_pct != null ? m.overlap_pct + '%' : '-') + '</b><span>重叠率</span></div>' +
+      '<div class="stat"><b>' + ((r.steps || {}).total != null ? r.steps.total + 's' : '-') + '</b><span>耗时</span></div>' +
+      '</div>';
+
+    html += '<div class="card"><div class="muted" style="margin-bottom:8px">下载</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      '<a class="btn primary" download href="' + fileUrl(job.id, 'assembled.jpg') + '">保存拼好的图</a>' +
+      '<a class="btn" download href="' + fileUrl(job.id, 'assembled_labels.jpg') + '">带名称版本</a>' +
+      '<a class="btn" download href="' + fileUrl(job.id, 'upload.jpg') + '">原始照片</a>' +
+      '<a class="btn" href="' + fileUrl(job.id, 'result.json') + '" target="_blank" rel="noopener">result.json</a>' +
+      '</div></div>';
+
+    var cands = (r.candidates || []);
+    if (cands.length) {
+      html += '<div class="card"><div class="muted" style="margin-bottom:8px">最可能的 ' +
+        cands.length + ' 种拼法（点开看大图 / 下载）</div><div class="gal">' +
+        cands.map(function (c) {
+          var n = c.name || c.file || c.n;
+          var url = fileUrl(job.id, n, job.updated);
+          gallery.push({ url: url, name: n });
+          return '<a href="#" data-lb="' + url + '" data-name="' + n + '">' +
+                 '<img src="' + url + '" alt="' + n + '" loading="lazy">' + n + '</a>';
+        }).join('') + '</div></div>';
+    }
+
+    var files = (r.files || []).filter(function (n) { return /\.(jpg|png)$/i.test(n); });
+    if (files.length) {
+      html += '<div class="card"><div class="muted" style="margin-bottom:8px">全部中间结果</div><div class="gal">' +
+        files.map(function (n) {
+          var url = fileUrl(job.id, n, job.updated);
+          gallery.push({ url: url, name: n });
+          return '<a href="#" data-lb="' + url + '" data-name="' + n + '">' +
+                 '<img src="' + url + '" alt="' + n + '" loading="lazy">' + n + '</a>';
+        }).join('') + '</div></div>';
+    }
+
+    if (r.joints && r.joints.length) {
+      html += '<div class="card"><div class="muted" style="margin-bottom:6px">拼合关系</div>' +
+        r.joints.map(function (j) {
+          return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:3px 8px;border-radius:999px;' +
+                 'background:#0b1220;border:1px solid var(--line);font-size:.74rem;">' +
+                 j.a + ' ↔ ' + j.b + (j.share != null ? ' · ' + j.share + '%' : '') + '</span>';
+        }).join('') + '</div>';
+    }
+
+    $('body').innerHTML = html;
+  }
+
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-lb]');
+    if (el) {
+      e.preventDefault();
+      openLb(el.getAttribute('data-lb'), el.getAttribute('data-name'));
+      return;
+    }
+    if (e.target.tagName === 'IMG' && e.target.dataset.name) {
+      openLb(e.target.src, e.target.dataset.name);
+    }
+  });
+
+  if (!jobId) {
+    $('head').textContent = '缺少任务 id';
+    $('body').innerHTML = '<div class="card err">URL 里没有 ?id=…，请从任务列表进入。</div>';
+  } else {
+    fetch('api/job?id=' + encodeURIComponent(jobId))
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.j.error || '任务不存在');
+        render(res.j);
+        if (res.j.status !== 'done') setTimeout(function () {
+          fetch('api/job?id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); })
+            .then(render).catch(function () {});
+        }, 4000);
+      })
+      .catch(function (err) {
+        $('head').textContent = '加载失败';
+        $('body').innerHTML = '<div class="card err">' + err.message + '</div>';
+      });
+  }
+})();
+</script>
+</body>
+</html>

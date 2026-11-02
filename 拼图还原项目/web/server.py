@@ -34,6 +34,7 @@ import jobstore  # noqa: E402  (任务状态落盘，页面关掉/服务重启�
 
 INDEX_FILE = WEB_DIR / "index.html"
 JOBS_FILE = WEB_DIR / "jobs.html"
+RESULT_FILE = WEB_DIR / "result.html"
 MAX_UPLOAD = 25 * 1024 * 1024          # 单张照片上限 25MB
 JOB_TTL = 24 * 3600                    # 任务结果（图片）保留 24 小时
 ALLOWED_FILES = {
@@ -281,6 +282,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         q = self._query()
+
+        if path in ("/result", "/result.html"):
+            f = WEB_DIR / "result.html"
+            if not f.exists():
+                self._send(500, b"result.html missing", "text/plain; charset=utf-8")
+                return
+            self._send(200, f.read_bytes(), "text/html; charset=utf-8")
+            return
 
         if path in ("/jobs", "/jobs.html"):
             if not JOBS_FILE.exists():
