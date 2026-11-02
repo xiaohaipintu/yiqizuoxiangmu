@@ -14,7 +14,6 @@ import argparse
 import json
 import os
 import queue
-import re
 import socket
 import threading
 import time
@@ -53,11 +52,18 @@ ALLOWED_FILES = {
 }
 
 
-# 分割/抠图阶段的中间产物：不进实时预览列表，但页面「原始分割结果」要能取到
-ALLOWED_FILES.update({
-    "01_alpha.png", "01_mask_raw.png", "01_despill.jpg",
-    "01_mask.png", "02_pieces.png", "03_cutouts.png", "assembled.jpg",
-})
+# 实时预览：按流水线顺序列出“做完一步就该出现”的图，前端轮询它决定现在能看什么
+PREVIEW_FILES = [
+    ("02_pieces.png", "碎片与边的编号"),
+    ("03_cutouts.png", "抠图结果（白底逐块）"),
+    ("01_mask.png", "前景掩膜"),
+    ("beam_progress.png", "拼装过程（每层刷新）"),
+    ("41_union_rank.png", "候选排名"),
+    ("assembled.jpg", "拼好的成品"),
+]
+for _n, _t in PREVIEW_FILES:
+    ALLOWED_FILES.add(_n)
+ALLOWED_FILES.update({"01_alpha.png", "01_mask_raw.png", "01_despill.jpg"})
 
 
 # --------------------------------------------------------------------------
@@ -78,12 +84,6 @@ for _n, _t in PREVIEW_FILES:
 # --------------------------------------------------------------------------
 # 日志：任务目录里的 logs/ 会额外归档一份到这里，任务被清理后仍能翻
 # --------------------------------------------------------------------------
-def valid_job_id(job_id: str) -> bool:
-    """任务 id 只可能是 uuid4().hex[:12] 那种十六进制串 —— 拼进文件路径前必须校验，
-    否则 `/api/file?id=../../xxx&n=upload.jpg` 能读到任务目录之外的同名白名单文件。"""
-    return bool(re.fullmatch(r"[0-9a-f]{6,32}", job_id or ""))
-
-
 def log_dir() -> Path:
     p = pipeline.job_root() / "logs"
     p.mkdir(parents=True, exist_ok=True)
@@ -319,9 +319,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/preview":
             job_id = q.get("id", "")
-            if not valid_job_id(job_id):
-                self._json(400, {"error": "任务 id 不合法"})
-                return
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
             if not job:
@@ -369,9 +366,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/job":
             job_id = q.get("id", "")
-            if not valid_job_id(job_id):
-                self._json(400, {"error": "任务 id 不合法"})
-                return
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
             if not job:                              # 进程重启过 → 从 job.json 读
@@ -396,9 +390,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/file":
             job_id = q.get("id", "")
             name = q.get("n", "")
-            if not valid_job_id(job_id):
-                self._json(400, {"error": "任务 id 不合法"})
-                return
             if name not in ALLOWED_FILES:
                 self._json(403, {"error": "不允许访问该文件"})
                 return
@@ -432,9 +423,6 @@ class Handler(BaseHTTPRequestHandler):
         # 暂停：只打标记，不杀子进程（当前子步骤会跑完，后续步骤不再开始）
         if path == "/api/cancel":
             job_id = self._query().get("id", "")
-            if not valid_job_id(job_id):
-                self._json(400, {"error": "任务 id 不合法"})
-                return
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
             if not job:
@@ -464,20 +452,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "图片数据不完整"})
             return
 
-        # 先解码校验，识别不了就直接拒 —— 必须在建任务之前，否则会在
-        # JOBS / job.json 里留下一条永远不会被 worker 消费的空任务（永远 queued）
+        job = new_job()
+        out_dir = Path(job["dir"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = out_dir / "upload.jpg"
+        upload_path.write_bytes(data)
+
+        # 校验能不能解码（顺便把手机 HEIC 之类的不支持格式挡在前面）
         import numpy as np
         import cv2
         probe = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if probe is None:
             self._json(400, {"error": "无法识别这张图片，请换成 JPG/PNG"})
             return
-
-        job = new_job()
-        out_dir = Path(job["dir"])
-        out_dir.mkdir(parents=True, exist_ok=True)
-        upload_path = out_dir / "upload.jpg"
-        upload_path.write_bytes(data)
 
         job["upload"] = str(upload_path)
         job["beam_time"] = None          # 自动：按碎片数给预算，不够吻合自己加时
