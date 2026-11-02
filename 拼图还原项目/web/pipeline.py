@@ -403,8 +403,7 @@ def beam_plan(n_pieces: int, total_edges: int) -> list:
     用户不需要选搜索时长：先给一个够用的预算，拼得不够吻合再翻倍重搜，
     最多三次（总时长在 solve() 里还有 150 秒硬上限）。
     """
-    # 碎片越多路径越长：7 块 110s、8 块 150s，再多给 200s 起步
-    base = {2: 5, 3: 8, 4: 18, 5: 35, 6: 50, 7: 110, 8: 150}.get(n_pieces, 200)
+    base = {2: 5, 3: 8, 4: 18, 5: 35, 6: 50}.get(n_pieces, 70)
     avg_edges = total_edges / max(n_pieces, 1)
     if avg_edges > 8:            # 凹形/多顶点碎片，搜索空间更大
         base = int(base * 1.4)
@@ -1053,8 +1052,6 @@ def solve(
     else:
         step("notch", "碎片构成不是「1 凹形 + 3 三角形」，跳过双射匹配")
 
-    # 搜索总时限：碎片多时放宽，避免跑到一半被砍
-    _time_limit = 150.0 if n_pieces <= 5 else (240.0 if n_pieces == 6 else 330.0)
     # 4) 束搜索拼合 —— 双射已成功时跳过（时间预算自动决定，不满意自己加时重搜）
     if notch_sol is None:
         total_edges = sum(len(p.get("edges") or []) for p in piece_list)
@@ -1085,7 +1082,7 @@ def solve(
 
         # 还不满意 → 打开逐块镜像（翻面/镜像拍摄的碎片只有这里能拼上），逐级加时
         mirror_retried = False
-        if not beam_ok(pick, n_pieces) and time.time() - t_start < _time_limit:
+        if not beam_ok(pick, n_pieces) and time.time() - t_start < 150:
             mirror_retried = True
             step("beam", "不镜像没拼好，打开逐块镜像重搜…")
             best_score = pick["score"] if pick else float("inf")
@@ -1099,17 +1096,12 @@ def solve(
                     if pick and pick["score"] < best_score - 1.0:
                         best_score = pick["score"]
                         improved = True
-                if beam_ok(pick, n_pieces) or time.time() - t_start > _time_limit:
+                if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
                     break
                 if j >= 1 and not improved:          # 加时也没改善 → 别硬跑
                     step("beam", "加时没有改善，停止搜索")
                     break
         if not n_sol:
-            if n_pieces >= 7:
-                raise RuntimeError(
-                    f"碎片太多（{n_pieces} 块），搜索在这么多块时很难一次拼对。"
-                    f"建议先用 5~6 块试；块数多时请重拍一次（正上方、边缘干净）再传"
-                )
             raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
 
     # 3.5) T 型接缝补充搜索：beam 表达不了「短边顶在长边中间」（一条边被两块共用），
