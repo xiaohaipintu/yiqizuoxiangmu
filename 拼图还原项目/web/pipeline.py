@@ -500,7 +500,7 @@ def solution_metrics(entry: dict, names: dict, starts: dict, share: float = 0.9)
 
 
 def rerank_solutions(sol_json: Path, names: dict, starts: dict,
-                     share: float = 0.9, top_k: int = 5,
+                     share: float = 0.9, top_k: int = 15,
                      extra_sols: list | None = None) -> dict | None:
     """在 beam 给出的候选里，按「拼法的合理性」排序，返回最优 + 前 top_k 名。
 
@@ -533,9 +533,11 @@ def rerank_solutions(sol_json: Path, names: dict, starts: dict,
     uniq, seen = [], set()
     for r in ranked:
         m = r["metrics"]
-        sig = (round(m.get("len_diff_pct", 0), 1),
-               round(m.get("hull_gap_pct", 0), 1),
-               round(m.get("rect_fill_pct", 0), 0),
+        # 去重：同一套拼法可能因放置顺序不同重复出现；保留 2 位小数，
+        # 以免把「确实略有差别」的拼法也合并掉（要展示前 15 名）
+        sig = (round(m.get("len_diff_pct", 0), 2),
+               round(m.get("hull_gap_pct", 0), 2),
+               round(m.get("rect_fill_pct", 0), 1),
                m.get("outline_vertices"))
         if sig in seen:
             continue
@@ -765,9 +767,14 @@ def render_assembled(
 
         # 直接用「图片多边形 → 世界多边形」的顶点对拟合相似变换。
         # 不去猜 placed 里 rot/tx/ty 的符号约定，避免约定不一致时贴出一张白图。
+        mirrored = bool(item[4]) if len(item) > 4 else False
         src = np.ascontiguousarray(poly_img, dtype=np.float32)
         dst = np.ascontiguousarray(poly_world, dtype=np.float32)
-        mat, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
+        if mirrored:
+            # 镜像块的顶点对应关系含反射，相似变换（Partial）表达不了 → 用全仿射
+            mat, _ = cv2.estimateAffine2D(src, dst, method=cv2.LMEDS)
+        else:
+            mat, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
         if mat is None or not np.all(np.isfinite(mat)):
             continue
 
@@ -1053,7 +1060,7 @@ def solve(
             step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
             _run("beam_search.py",
                  ["--pieces", scaled_json, "--out", out,
-                  "--beam", "300", "--time", str(float(budget))],
+                  "--beam", "300", "--time", str(float(budget)), "--save", "200"],
                  timeout=budget + 240, log=step, steps=steps,
                  logs_dir=logs)
             if not sol_json.exists():

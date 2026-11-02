@@ -68,10 +68,39 @@ def render_progress(polys, level, n_total, gap, path) -> None:
         pass
 
 
-def expand(pieces, placed, polys, used, qid, cov, overlap_tol):
-    q = pieces[qid]
+def mirror_piece(p):
+    """返回 p 的镜像副本（沿 y 轴反射：x → -x）。面积/边长不变，边的朝向翻转。"""
+
+    def flip(pt):
+        return [-float(pt[0]), float(pt[1])]
+
+    edges = []
+    for e in p.edges:
+        ne = dict(e)
+        ne["a"] = flip(e["a"])
+        ne["b"] = flip(e["b"])
+        edges.append(ne)
+    return Piece({
+        "id": p.id,
+        "polygon": [flip(pt) for pt in p.poly],
+        "area": p.area,
+        "centroid": flip(p.centroid),
+        "edges": edges,
+    })
+
+
+def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
+    """把所有「已放置碎片的边 × 待放碎片的边」的贴合方式列出来。
+
+    mirror_map 存在时，待放碎片会**同时尝试原版和镜像版**——每个组件都试镜像。
+    返回 (已放块id, 已放边号, 新块边号, 角度, tx, ty, 世界多边形, 是否镜像)
+    """
+    variants = [(pieces[qid], False)]
+    if mirror_map and qid in mirror_map:
+        variants.append((mirror_map[qid], True))
     out = []
-    for k, (pid, _, _, _) in enumerate(placed):
+    for k, item in enumerate(placed):
+        pid = int(item[0])
         pw = polys[k]
         p = pieces[pid]
         for ei in range(p.n):
@@ -82,27 +111,28 @@ def expand(pieces, placed, polys, used, qid, cov, overlap_tol):
             if La < 1e-6:
                 continue
             u = (bw - aw) / La
-            for fi in range(q.n):
-                eb = q.edges[fi]
-                Lb = float(eb["length"])
-                for anchor in (True, False):
-                    ang, t = place_edge(q, fi, aw, bw, anchor)
-                    wq = world(q, ang, t)
-                    qaw = (G.rotation(ang) @ np.asarray(eb["a"], float)) + np.asarray(t, float)
-                    qbw = (G.rotation(ang) @ np.asarray(eb["b"], float)) + np.asarray(t, float)
-                    proj = np.clip([((qaw - aw) @ u), ((qbw - aw) @ u)], 0, La)
-                    shared = float(max(0.0, proj.max() - proj.min()))
-                    if shared < cov * min(La, Lb):
-                        continue
-                    ca, cq = p.poly.mean(axis=0), wq.mean(axis=0)
-                    sa = u[0] * (ca[1] - aw[1]) - u[1] * (ca[0] - aw[0])
-                    sq = u[0] * (cq[1] - aw[1]) - u[1] * (cq[0] - aw[0])
-                    if sa * sq >= 0:
-                        continue
-                    ov = sum(G.poly_overlap_area(wq, pp) for pp in polys)
-                    if ov > overlap_tol * q.area:
-                        continue
-                    out.append((pid, ei, fi, ang, float(t[0]), float(t[1]), wq))
+            for q, q_mirror in variants:
+                for fi in range(q.n):
+                    eb = q.edges[fi]
+                    Lb = float(eb["length"])
+                    for anchor in (True, False):
+                        ang, tr = place_edge(q, fi, aw, bw, anchor)
+                        wq = world(q, ang, tr)
+                        qaw = (G.rotation(ang) @ np.asarray(eb["a"], float)) + np.asarray(tr, float)
+                        qbw = (G.rotation(ang) @ np.asarray(eb["b"], float)) + np.asarray(tr, float)
+                        proj = np.clip([((qaw - aw) @ u), ((qbw - aw) @ u)], 0, La)
+                        shared = float(max(0.0, proj.max() - proj.min()))
+                        if shared < cov * min(La, Lb):
+                            continue
+                        ca, cq = p.poly.mean(axis=0), wq.mean(axis=0)
+                        sa = u[0] * (ca[1] - aw[1]) - u[1] * (ca[0] - aw[0])
+                        sq = u[0] * (cq[1] - aw[1]) - u[1] * (cq[0] - aw[0])
+                        if sa * sq >= 0:
+                            continue
+                        ov = sum(G.poly_overlap_area(wq, pp) for pp in polys)
+                        if ov > overlap_tol * q.area:
+                            continue
+                        out.append((pid, ei, fi, ang, float(tr[0]), float(tr[1]), wq, q_mirror))
     return out
 
 
@@ -114,19 +144,23 @@ def main() -> int:
     ap.add_argument("--cov", type=float, default=0.35)
     ap.add_argument("--overlap", type=float, default=0.004)
     ap.add_argument("--time", type=float, default=180.0)
-    ap.add_argument("--save", type=int, default=30,
+    ap.add_argument("--save", type=int, default=60,
                     help="最多保存多少个完整解到 beam_solutions.json（上层重排要看更多候选）")
+    ap.add_argument("--no-mirror", action="store_true",
+                    help="关闭逐块镜像（默认每个组件都会尝试镜像）")
     args = ap.parse_args()
 
     outdir = pathlib.Path(args.out)
     data = json.loads(pathlib.Path(args.pieces).read_text(encoding="utf-8"))
     pieces = {int(d["id"]): Piece(d) for d in data["pieces"]}
+    mirror_map = {} if args.no_mirror else {pid: mirror_piece(p) for pid, p in pieces.items()}
     deadline = time.time() + args.time
 
     seed = max(pieces, key=lambda i: pieces[i].area)
-    states = [([(seed, 0.0, 0.0, 0.0)], [world(pieces[seed], 0.0, (0.0, 0.0))],
+    states = [([(seed, 0.0, 0.0, 0.0, False)],
+               [world(pieces[seed], 0.0, (0.0, 0.0))],
                {pid: set() for pid in pieces})]
-    print(f"碎片 {len(pieces)}，起始块 #{seed}")
+    print(f"碎片 {len(pieces)}，起始块 #{seed}，镜像={'开' if mirror_map else '关'}")
     render_progress(states[0][1], 1, len(pieces), gap_pct(states[0][1]),
                     outdir / "beam_progress.png")
     for level in range(2, len(pieces) + 1):
@@ -136,13 +170,13 @@ def main() -> int:
             for qid in pieces:
                 if qid in done:
                     continue
-                for pid, ei, fi, ang, tx, ty, wq in expand(pieces, placed, polys, used,
-                                                          qid, args.cov, args.overlap):
+                for (pid, ei, fi, ang, tx, ty, wq, q_mirror) in expand(
+                        pieces, placed, polys, used, qid, args.cov, args.overlap, mirror_map):
                     nu = {kk: set(v) for kk, v in used.items()}
                     nu[pid].add(ei)
                     nu[qid] = {fi}
-                    cand.append((placed + [(qid, ang, tx, ty)], polys + [wq], nu,
-                                 gap_pct(polys + [wq])))
+                    cand.append((placed + [(qid, ang, tx, ty, q_mirror)],
+                                 polys + [wq], nu, gap_pct(polys + [wq])))
             if time.time() > deadline:
                 break
         if not cand:
@@ -150,8 +184,11 @@ def main() -> int:
             break
         cand.sort(key=lambda s: s[3])
         states = [(a, b, c) for a, b, c, _ in cand[: args.beam]]
+        n_mir = sum(1 for a, _, _ in states
+                    if any((len(r) > 4 and r[4]) for r in a))
         print(f"第 {level} 层：候选 {len(cand)}，缝最大 {cand[0][3]:.2f}% / "
-              f"保留 {len(states)}（最差 {cand[min(len(cand) - 1, args.beam - 1)][3]:.2f}%）")
+              f"保留 {len(states)}（最差 {cand[min(len(cand) - 1, args.beam - 1)][3]:.2f}%）"
+              f"，其中含镜像块 {n_mir}")
         render_progress(states[0][1], level, len(pieces), cand[0][3],
                         outdir / "beam_progress.png")
         if time.time() > deadline:
@@ -161,7 +198,8 @@ def main() -> int:
     full = sorted([(gap_pct(polys), placed, polys) for placed, polys, used in states
                    if len(placed) == len(pieces)], key=lambda x: x[0])
     if full:
-        print(f"完整拼法 {len(full)} 个，最好 缝 {full[0][0]:.2f}%")
+        n_mirror_sol = sum(1 for _, pl, _ in full if any(len(r) > 4 and r[4] for r in pl))
+        print(f"完整拼法 {len(full)} 个，最好 缝 {full[0][0]:.2f}%（含镜像块 {n_mirror_sol} 个）")
     else:
         print("没有完整拼法")
     (outdir / "beam_solutions.json").write_text(json.dumps(
