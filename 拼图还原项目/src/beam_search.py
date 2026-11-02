@@ -151,7 +151,7 @@ def rect_ratio(polys) -> float:
     return float(abs(cv2.contourArea(hull)) / box)
 
 
-def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
+def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None, len_tol=0.15):
     """列出所有贴合方式；同时做「边的区间占用」检查。
 
     返回 (已放块id, 已放边号, 新块边号, 角度, tx, ty, 世界多边形, 是否镜像,
@@ -177,6 +177,10 @@ def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
                 for fi in range(q.n):
                     eb = q.edges[fi]
                     Lb = float(eb["length"])
+                    # ★ 边长配对：接缝两侧长度必须接近（相对 OR 绝对，短边靠绝对像素兜底）
+                    d_len = abs(Lb - La)
+                    if d_len > max(len_tol * min(La, Lb), 9.0):
+                        continue
                     for anchor in (True, False):
                         ang, tr = place_edge(q, fi, aw, bw, anchor)
                         wq = world(q, ang, tr)
@@ -248,6 +252,8 @@ def main() -> int:
     ap.add_argument("--time", type=float, default=180.0)
     ap.add_argument("--save", type=int, default=60,
                     help="最多保存多少个完整解到 beam_solutions.json")
+    ap.add_argument("--len-tol", type=float, default=0.15,
+                    help="拼接边长度允许的相对差（默认 8%%，拼图切割的接缝两侧边长应接近）")
     ap.add_argument("--no-mirror", action="store_true",
                     help="关闭逐块镜像（默认每个组件都会尝试镜像）")
     args = ap.parse_args()
@@ -275,7 +281,8 @@ def main() -> int:
                 if qid in done:
                     continue
                 for (pid, ei, fi, ang, tx, ty, wq, q_mirror, seg0, seg1, Lb) in expand(
-                        pieces, placed, polys, used, qid, args.cov, args.overlap, mirror_map):
+                        pieces, placed, polys, used, qid, args.cov, args.overlap,
+                        mirror_map, args.len_tol):
                     nu = {kk: {e: list(v) for e, v in vv.items()} for kk, vv in used.items()}
                     nu[pid].setdefault(ei, []).append((seg0, seg1))
                     nu[qid] = {fi: [(0.0, Lb)]}

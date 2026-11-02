@@ -1105,6 +1105,11 @@ def solve(
                     step("beam", "加时没有改善，停止搜索")
                     break
         if not n_sol:
+            if n_pieces >= 7:
+                raise RuntimeError(
+                    f"碎片太多（{n_pieces} 块），搜索在这么多块时很难一次拼对。"
+                    f"建议先用 5~6 块试；块数多时请重拍一次（正上方、边缘干净）再传"
+                )
             raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
 
     # 3.5) T 型接缝补充搜索：beam 表达不了「短边顶在长边中间」（一条边被两块共用），
