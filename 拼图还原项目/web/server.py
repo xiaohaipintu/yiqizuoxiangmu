@@ -464,19 +464,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "图片数据不完整"})
             return
 
-        job = new_job()
-        out_dir = Path(job["dir"])
-        out_dir.mkdir(parents=True, exist_ok=True)
-        upload_path = out_dir / "upload.jpg"
-        upload_path.write_bytes(data)
-
-        # 校验能不能解码（顺便把手机 HEIC 之类的不支持格式挡在前面）
+        # 先解码校验，识别不了就直接拒 —— 必须在建任务之前，否则会在
+        # JOBS / job.json 里留下一条永远不会被 worker 消费的空任务（永远 queued）
         import numpy as np
         import cv2
         probe = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if probe is None:
             self._json(400, {"error": "无法识别这张图片，请换成 JPG/PNG"})
             return
+
+        job = new_job()
+        out_dir = Path(job["dir"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = out_dir / "upload.jpg"
+        upload_path.write_bytes(data)
 
         job["upload"] = str(upload_path)
         job["beam_time"] = None          # 自动：按碎片数给预算，不够吻合自己加时

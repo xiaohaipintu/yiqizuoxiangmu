@@ -404,7 +404,9 @@ def beam_plan(n_pieces: int, total_edges: int) -> list:
     用户不需要选搜索时长：先给一个够用的预算，拼得不够吻合再翻倍重搜，
     最多三次（总时长在 solve() 里还有 150 秒硬上限）。
     """
-    # 碎片越多路径越长：7 块 110s、8 块 150s，再多给 200s 起步
+    # 碎片越多路径越长：表里是「不封顶时」的期望预算（7 块 110s、8 块 150s，再多 200s）。
+    # 但第一次只给一个短预算（封顶 70s）—— 大多数照片这一次就够，不够再加时重搜，
+    # 追加档位是 [base, 2×base, 3.5×base]，分别封顶 110s / 150s。
     base = {2: 5, 3: 8, 4: 18, 5: 35, 6: 50, 7: 110, 8: 150}.get(n_pieces, 200)
     avg_edges = total_edges / max(n_pieces, 1)
     if avg_edges > 8:            # 凹形/多顶点碎片，搜索空间更大
@@ -706,7 +708,6 @@ def render_assembled(
     info: dict | None = None,
     solution: dict | None = None,
     fg_mask_path: str | Path | None = None,
-    fg_alpha_path: str | Path | None = None,
 ) -> bool:
     img = read_image(image_path)
     if solution is not None:
@@ -741,23 +742,19 @@ def render_assembled(
 
     # 前景掩膜：只贴真实碎片像素，避免把碎片边缘那一圈背景色也贴上去
     # （否则每块都自带一条绿色包边，拼缝看起来就像没拼上）
+    # 传进来的可以是二值掩膜（01_mask.png），也可以是软边 alpha（key_alpha.png，0~255 渐变）；
+    # 调用方优先传后者。
     fg = None
-    # 软边 alpha 优先（01_alpha.png 是 0~255 渐变），没有才退回二值 01_mask.png
-    for cand in (fg_alpha_path, fg_mask_path):
-        if not cand:
-            continue
+    if fg_mask_path:
         try:
-            f = read_image(cand)
+            f = read_image(fg_mask_path)
         except Exception:
-            continue
-        if f is None:
-            continue
-        if f.ndim == 3:
-            f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-        if f.shape[:2] != (h_img, w_img):
-            continue
-        fg = f
-        break
+            f = None
+        if f is not None:
+            if f.ndim == 3:
+                f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+            if f.shape[:2] == (h_img, w_img):
+                fg = f
     for k, item in enumerate(placed):
         if k >= len(polys):
             break
