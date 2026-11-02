@@ -89,11 +89,35 @@ def mirror_piece(p):
     })
 
 
-def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
-    """把所有「已放置碎片的边 × 待放碎片的边」的贴合方式列出来。
+def _seg_overlap(e1a, e1b, e2a, e2b) -> float:
+    """两条线段若近共线，返回重叠长度（否则 0）。"""
+    v1 = e1b - e1a
+    L1 = float(np.linalg.norm(v1))
+    v2 = e2b - e2a
+    L2 = float(np.linalg.norm(v2))
+    if L1 < 1e-6 or L2 < 1e-6:
+        return 0.0
+    u1 = v1 / L1
+    u2 = v2 / L2
+    if abs(u1[0] * u2[1] - u1[1] * u2[0]) > 0.35:      # 夹角 > ~20° 不算共线
+        return 0.0
+    # 端点离对方直线的距离
+    n1 = np.array([-u1[1], u1[0]])
+    d2a = abs(float((e2a - e1a) @ n1))
+    d2b = abs(float((e2b - e1a) @ n1))
+    if min(d2a, d2b) > 6.0:
+        return 0.0
+    t1 = float((e2a - e1a) @ u1)
+    t2 = float((e2b - e1a) @ u1)
+    lo, hi = min(t1, t2), max(t1, t2)
+    return max(0.0, min(hi, L1) - max(lo, 0.0))
 
-    mirror_map 存在时，待放碎片会**同时尝试原版和镜像版**——每个组件都试镜像。
-    返回 (已放块id, 已放边号, 新块边号, 角度, tx, ty, 世界多边形, 是否镜像)
+
+def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
+    """列出所有贴合方式；同时做「边的区间占用」检查。
+
+    返回 (已放块id, 已放边号, 新块边号, 角度, tx, ty, 世界多边形, 是否镜像,
+          占用段起点, 占用段终点, 新块边长)
     """
     variants = [(pieces[qid], False)]
     if mirror_map and qid in mirror_map:
@@ -103,14 +127,14 @@ def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
         pid = int(item[0])
         pw = polys[k]
         p = pieces[pid]
+        occ_map = used.get(pid) or {}
         for ei in range(p.n):
-            if ei in used[pid]:
-                continue
             aw, bw = pw[ei], pw[(ei + 1) % p.n]
             La = float(np.linalg.norm(bw - aw))
             if La < 1e-6:
                 continue
             u = (bw - aw) / La
+            occ = occ_map.get(ei, [])
             for q, q_mirror in variants:
                 for fi in range(q.n):
                     eb = q.edges[fi]
@@ -120,10 +144,19 @@ def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
                         wq = world(q, ang, tr)
                         qaw = (G.rotation(ang) @ np.asarray(eb["a"], float)) + np.asarray(tr, float)
                         qbw = (G.rotation(ang) @ np.asarray(eb["b"], float)) + np.asarray(tr, float)
-                        proj = np.clip([((qaw - aw) @ u), ((qbw - aw) @ u)], 0, La)
-                        shared = float(max(0.0, proj.max() - proj.min()))
+                        p0 = float((qaw - aw) @ u)
+                        p1 = float((qbw - aw) @ u)
+                        seg0, seg1 = (p0, p1) if p0 <= p1 else (p1, p0)
+                        seg0, seg1 = max(0.0, seg0), min(La, seg1)
+                        shared = max(0.0, seg1 - seg0)
                         if shared < cov * min(La, Lb):
                             continue
+                        # ★ 同一段已被别的块占用 → 冲突，剪掉
+                        if shared > 1e-6 and occ:
+                            used_len = sum(max(0.0, min(seg1, e1) - max(seg0, e0))
+                                           for e0, e1 in occ)
+                            if used_len > 0.25 * shared:
+                                continue
                         ca, cq = p.poly.mean(axis=0), wq.mean(axis=0)
                         sa = u[0] * (ca[1] - aw[1]) - u[1] * (ca[0] - aw[0])
                         sq = u[0] * (cq[1] - aw[1]) - u[1] * (cq[0] - aw[0])
@@ -132,7 +165,36 @@ def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
                         ov = sum(G.poly_overlap_area(wq, pp) for pp in polys)
                         if ov > overlap_tol * q.area:
                             continue
-                        out.append((pid, ei, fi, ang, float(tr[0]), float(tr[1]), wq, q_mirror))
+                        # ★ 几何去重：新块任何一条边，不能在空间上和"其它已贴边"重复占线
+                        bad = False
+                        for kk, pw_other in enumerate(polys):
+                            other_pid = int(placed[kk][0])
+                            o_n = len(pw_other)
+                            for ej in range(o_n):
+                                oa, ob = pw_other[ej], pw_other[(ej + 1) % o_n]
+                                for fj in range(q.n):
+                                    wa, wb = wq[fj], wq[(fj + 1) % q.n]
+                                    ovl = _seg_overlap(wa, wb, oa, ob)
+                                    if ovl <= 1e-6:
+                                        continue
+                                    shorter = min(float(np.linalg.norm(wb - wa)),
+                                                  float(np.linalg.norm(ob - oa)))
+                                    if shorter < 1e-6:
+                                        continue
+                                    if ovl > 0.20 * shorter:
+                                        # 允许「这条边正是本次贴合的那条」的重叠
+                                        if other_pid == pid and ej == ei and fj == fi:
+                                            continue
+                                        bad = True
+                                        break
+                                if bad:
+                                    break
+                            if bad:
+                                break
+                        if bad:
+                            continue
+                        out.append((pid, ei, fi, ang, float(tr[0]), float(tr[1]), wq,
+                                    q_mirror, seg0, seg1, Lb))
     return out
 
 
@@ -145,7 +207,7 @@ def main() -> int:
     ap.add_argument("--overlap", type=float, default=0.004)
     ap.add_argument("--time", type=float, default=180.0)
     ap.add_argument("--save", type=int, default=60,
-                    help="最多保存多少个完整解到 beam_solutions.json（上层重排要看更多候选）")
+                    help="最多保存多少个完整解到 beam_solutions.json")
     ap.add_argument("--no-mirror", action="store_true",
                     help="关闭逐块镜像（默认每个组件都会尝试镜像）")
     args = ap.parse_args()
@@ -157,9 +219,10 @@ def main() -> int:
     deadline = time.time() + args.time
 
     seed = max(pieces, key=lambda i: pieces[i].area)
+    # used[pid][edge] = [(t0,t1)] 已占用区间
     states = [([(seed, 0.0, 0.0, 0.0, False)],
                [world(pieces[seed], 0.0, (0.0, 0.0))],
-               {pid: set() for pid in pieces})]
+               {pid: {} for pid in pieces})]
     print(f"碎片 {len(pieces)}，起始块 #{seed}，镜像={'开' if mirror_map else '关'}")
     render_progress(states[0][1], 1, len(pieces), gap_pct(states[0][1]),
                     outdir / "beam_progress.png")
@@ -170,11 +233,11 @@ def main() -> int:
             for qid in pieces:
                 if qid in done:
                     continue
-                for (pid, ei, fi, ang, tx, ty, wq, q_mirror) in expand(
+                for (pid, ei, fi, ang, tx, ty, wq, q_mirror, seg0, seg1, Lb) in expand(
                         pieces, placed, polys, used, qid, args.cov, args.overlap, mirror_map):
-                    nu = {kk: set(v) for kk, v in used.items()}
-                    nu[pid].add(ei)
-                    nu[qid] = {fi}
+                    nu = {kk: {e: list(v) for e, v in vv.items()} for kk, vv in used.items()}
+                    nu[pid].setdefault(ei, []).append((seg0, seg1))
+                    nu[qid] = {fi: [(0.0, Lb)]}
                     cand.append((placed + [(qid, ang, tx, ty, q_mirror)],
                                  polys + [wq], nu, gap_pct(polys + [wq])))
             if time.time() > deadline:
@@ -184,8 +247,7 @@ def main() -> int:
             break
         cand.sort(key=lambda s: s[3])
         states = [(a, b, c) for a, b, c, _ in cand[: args.beam]]
-        n_mir = sum(1 for a, _, _ in states
-                    if any((len(r) > 4 and r[4]) for r in a))
+        n_mir = sum(1 for a, _, _ in states if any((len(r) > 4 and r[4]) for r in a))
         print(f"第 {level} 层：候选 {len(cand)}，缝最大 {cand[0][3]:.2f}% / "
               f"保留 {len(states)}（最差 {cand[min(len(cand) - 1, args.beam - 1)][3]:.2f}%）"
               f"，其中含镜像块 {n_mir}")
@@ -210,5 +272,7 @@ def main() -> int:
     return 0
 
 
+if __name__ == "__main__":
+    raise SystemExit(main())
 if __name__ == "__main__":
     raise SystemExit(main())
