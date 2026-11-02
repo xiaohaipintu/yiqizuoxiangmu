@@ -501,7 +501,7 @@ def solution_metrics(entry: dict, names: dict, starts: dict, share: float = 0.9)
 
 
 def rerank_solutions(sol_json: Path, names: dict, starts: dict,
-                     share: float = 0.9, top_k: int = 15,
+                     share: float = 0.9, top_k: int = 50,
                      extra_sols: list | None = None) -> dict | None:
     """在 beam 给出的候选里，按「拼法的合理性」排序，返回最优 + 前 top_k 名。
 
@@ -1055,8 +1055,32 @@ def solve(
 
     # 搜索总时限：碎片多时放宽，避免跑到一半被砍
     _time_limit = 150.0 if n_pieces <= 5 else (240.0 if n_pieces == 6 else 330.0)
+    # 3.9) C++ 配对求解（边长匹配预计算 + 深搜）：毫秒级出几十个候选，先跑它
+    pair_sols: list = []
+    pair_good = False
+    try:
+        import subprocess as _sp
+        _pf = WEB_DIR / "pair_fast.py"
+        if _pf.exists():
+            step("pair", "配对求解（边长匹配 + 深度优先）…")
+            _p = _sp.run([sys.executable, str(_pf), "--pieces", str(scaled_json),
+                          "--out", str(out), "--tops", "50", "--time", "25"],
+                         capture_output=True, text=True, timeout=40)
+            if _p.stdout.strip():
+                step("pair", _p.stdout.strip().splitlines()[0])
+            pj = out / "pair_solutions.json"
+            if pj.exists():
+                pair_sols = list(json.loads(pj.read_text(encoding="utf-8")).get("solutions") or [])
+                if pair_sols:
+                    _bg = float(pair_sols[0].get("gap_pct") or 999)
+                    pair_good = _bg <= 4.0          # 缝 ≤4% 认为配对求解已经拼好了
+                    step("pair", "配对解可用（缝 %.2f%%），%s" %
+                         (_bg, "跳过束搜索省时间" if pair_good else "继续跑束搜索"))
+    except Exception as exc:
+        step("pair", f"配对求解跳过：{exc}")
+
     # 4) 束搜索拼合 —— 双射已成功时跳过（时间预算自动决定，不满意自己加时重搜）
-    if notch_sol is None:
+    if notch_sol is None and not pair_good:
         total_edges = sum(len(p.get("edges") or []) for p in piece_list)
         plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
 
@@ -1142,7 +1166,7 @@ def solve(
         except Exception as exc:
             step("split", f"T型接缝搜索跳过：{exc}")
 
-        pick = rerank_solutions(sol_json, names, starts, extra_sols=split_sols)
+        pick = rerank_solutions(sol_json, names, starts, extra_sols=split_sols + pair_sols)
 
         # 5) 并集评估
         step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
