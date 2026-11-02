@@ -1056,24 +1056,51 @@ def solve(
     if notch_sol is None:
         total_edges = sum(len(p.get("edges") or []) for p in piece_list)
         plan = [round(float(beam_time))] if beam_time else beam_plan(n_pieces, total_edges)
-        for i, budget in enumerate(plan):
-            step("beam", f"搜索拼法（第 {i + 1} 次，预算 {budget} 秒）…")
-            _run("beam_search.py",
-                 ["--pieces", scaled_json, "--out", out,
-                  "--beam", "300", "--time", str(float(budget)), "--save", "200"],
-                 timeout=budget + 240, log=step, steps=steps,
-                 logs_dir=logs)
+
+        def _beam_once(budget: float, no_mirror: bool, tag: str):
+            """跑一次束搜索。第一轮关镜像（快），需要时再开镜像重搜。"""
+            args = ["--pieces", scaled_json, "--out", out,
+                    "--beam", "300", "--time", str(float(budget)), "--save", "200"]
+            if no_mirror:
+                args.append("--no-mirror")
+            step("beam", f"搜索拼法（{tag}，预算 {budget} 秒）…")
+            _run("beam_search.py", args, timeout=budget + 240, log=step,
+                 steps=steps, logs_dir=logs)
             if not sol_json.exists():
                 raise RuntimeError("搜索失败：没有生成 beam_solutions.json")
-            n_sol = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
-            if not n_sol:
-                continue
-            pick = rerank_solutions(sol_json, names, starts)
-            beam_runs.append({"budget": budget, "solutions": n_sol,
-                              "len_diff": pick["diff"] if pick else None,
-                              "pairs": pick["pairs"] if pick else 0})
-            if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
-                break
+            n = json.loads(sol_json.read_text(encoding="utf-8")).get("n", 0)
+            if not n:
+                return 0, None
+            pk = rerank_solutions(sol_json, names, starts)
+            beam_runs.append({"budget": budget, "solutions": n, "mirror": not no_mirror,
+                              "len_diff": pk["diff"] if pk else None,
+                              "pairs": pk["pairs"] if pk else 0})
+            return n, pk
+
+        # 第一轮：不镜像，**只跑 1 次**（最小预算）。绝大多数照片这一步就够，快一倍
+        n_sol, pick = _beam_once(plan[0], True, "第 1 次·不镜像")
+
+        # 还不满意 → 打开逐块镜像（翻面/镜像拍摄的碎片只有这里能拼上），逐级加时
+        mirror_retried = False
+        if not beam_ok(pick, n_pieces) and time.time() - t_start < 150:
+            mirror_retried = True
+            step("beam", "不镜像没拼好，打开逐块镜像重搜…")
+            best_score = pick["score"] if pick else float("inf")
+            for j, budget in enumerate(plan):
+                n2, pick2 = _beam_once(budget, False, f"开镜像第 {j + 1} 次")
+                improved = False
+                if n2:
+                    n_sol = n2
+                    if pick2 and (not pick or pick2["score"] < pick["score"]):
+                        pick = pick2
+                    if pick and pick["score"] < best_score - 1.0:
+                        best_score = pick["score"]
+                        improved = True
+                if beam_ok(pick, n_pieces) or time.time() - t_start > 150:
+                    break
+                if j >= 1 and not improved:          # 加时也没改善 → 别硬跑
+                    step("beam", "加时没有改善，停止搜索")
+                    break
         if not n_sol:
             raise RuntimeError("没有找到任何拼法，换个背景更干净的照片试试")
 
@@ -1139,6 +1166,7 @@ def solve(
             "score": pick["score"],
             "budget_s": beam_runs[-1]["budget"] if beam_runs else None,
             "attempts": len(beam_runs),
+            "mirror_retried": bool(mirror_retried),
         })
         (out / "chosen_solution.json").write_text(
             json.dumps({"ranking": ranking, **solution}, ensure_ascii=False, indent=2),
