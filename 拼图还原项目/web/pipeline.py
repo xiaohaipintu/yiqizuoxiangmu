@@ -394,7 +394,8 @@ def clean_pieces(pieces_json: Path, tol: float = CLEAN_ANGLE_TOL) -> dict:
     return {"vertices_before": before, "vertices_after": after, "merged": changed}
 
 
-GOOD_LEN_DIFF = 4.0          # 对接边长差 ≤4% 认为拼对了GOOD_PAIRS_RATIO = 1.0       # 贴合对数至少要 n-1（串成一串）
+GOOD_LEN_DIFF = 4.0          # 对接边长差 ≤4% 认为拼对了
+GOOD_PAIRS_RATIO = 1.0       # 贴合对数至少要 n-1（串成一串）
 
 
 def beam_plan(n_pieces: int, total_edges: int) -> list:
@@ -1144,7 +1145,10 @@ def solve(
 
         pick = rerank_solutions(sol_json, names, starts, extra_sols=split_sols)
 
-        # 5) 并集评估
+    # 5) 并集评估：产出候选排名图 41_union_rank.png + best_union.json（渲染的兜底解）。
+    #    这一步必须**无条件**跑 —— 放进上面 else 里的话，常规搜索达标（T 型搜索被跳过）时
+    #    它就整步不跑，页面的「候选排名」「分割掩膜」两张图都拿不到。
+    if sol_json.exists():
         step("eval", f"{n_sol} 个候选，评估空洞/重叠…")
         _run("eval_union.py",
              ["--solutions", sol_json, "--out", out, "--top", "4"], timeout=180, log=step,
