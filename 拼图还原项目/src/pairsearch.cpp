@@ -58,33 +58,6 @@ static bool point_in_poly(Pt p, const std::vector<Pt>& poly, double eps) {
     return in;
 }
 
-// 近似重叠面积：在两者包围盒交集里按 step 采样；累计超过 limit 立刻返回（早退）
-static double overlap_area_limited(const std::vector<Pt>& A, const std::vector<Pt>& B,
-                                   double limit, double step = 1.6) {
-    double ax0 = 1e18, ax1 = -1e18, ay0 = 1e18, ay1 = -1e18;
-    for (const auto& p : A) { ax0 = std::min(ax0, p.x); ax1 = std::max(ax1, p.x);
-                              ay0 = std::min(ay0, p.y); ay1 = std::max(ay1, p.y); }
-    double bx0 = 1e18, bx1 = -1e18, by0 = 1e18, by1 = -1e18;
-    for (const auto& p : B) { bx0 = std::min(bx0, p.x); bx1 = std::max(bx1, p.x);
-                              by0 = std::min(by0, p.y); by1 = std::max(by1, p.y); }
-    double x0 = std::max(ax0, bx0), x1 = std::min(ax1, bx1);
-    double y0 = std::max(ay0, by0), y1 = std::min(ay1, by1);
-    if (x1 <= x0 || y1 <= y0) return 0.0;              // 包围盒不相交
-    double cell = step * step;
-    double acc = 0.0;
-    for (double y = y0; y <= y1; y += step) {
-        for (double x = x0; x <= x1; x += step) {
-            Pt p{x, y};
-            if (point_in_poly(p, A, 0.0) && point_in_poly(p, B, 0.0)) {
-                acc += cell;
-                if (acc > limit) return acc;           // 够了，不用再算
-            }
-        }
-    }
-    return acc;
-}
-
-
 // 点到多边形边界的最短距离
 static double dist_to_poly(Pt p, const std::vector<Pt>& poly) {
     double best = 1e18;
@@ -174,8 +147,7 @@ static void eval_state(State& st) {
     double box = (maxx - minx) * (maxy - miny);
     st.gap = ha > 1e-9 ? (ha - st.sum_area) / ha * 100.0 : 999.0;
     st.rect = box > 1e-9 ? ha / box : 0.0;
-    // 空隙为主；矩形度只做轻微 tie-break（不假设目标一定是方形）
-    st.score = st.gap + 10.0 * (1.0 - st.rect);
+    st.score = st.gap + 60.0 * (1.0 - st.rect);
 }
 
 static std::string make_sig(const State& st) {
@@ -194,7 +166,6 @@ static std::string make_sig(const State& st) {
 int main(int argc, char** argv) {
     // 参数：--rel <相对容差> --abs <绝对容差> --beam <K> --tops <N> --nodes <上限>
     double rel_tol = 0.15, abs_tol = 9.0;
-    double ovl_frac = 0.004, ovl_px = 60.0;      // 单对容许的重叠（面积占比 / 绝对像素²）
     int beamK = 3000, topN = 50;
     long nodes_cap = 4000000;
     for (int i = 1; i < argc; ++i) {
@@ -203,8 +174,6 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--beam") && i + 1 < argc) beamK = atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--tops") && i + 1 < argc) topN = atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--nodes") && i + 1 < argc) nodes_cap = atol(argv[++i]);
-        else if (!std::strcmp(argv[i], "--ovl-frac") && i + 1 < argc) ovl_frac = atof(argv[++i]);
-        else if (!std::strcmp(argv[i], "--ovl-px") && i + 1 < argc) ovl_px = atof(argv[++i]);
     }
 
     // 读输入
@@ -271,11 +240,7 @@ int main(int argc, char** argv) {
                         std::vector<Pt> qw;
                         qw.reserve(pieces[Q].poly.size());
                         for (const auto& p : pieces[Q].poly) qw.push_back(rot_p(p, ang) + t);
-                        {
-                            // 无条件按面积判重叠：细条状重叠顶点可能不深入，光靠顶点判会漏
-                            double lim = std::max(ovl_frac * pieces[Q].area, ovl_px);
-                            if (overlap_area_limited(pieces[P].poly, qw, lim) > lim) continue;
-                        }
+                        if (overlap_bad(pieces[P].poly, qw, 3.0)) continue;
                         rel[P][i].push_back({Q, (int)j, ang, t.x, t.y});
                         ++cand_pairs;
                     }
@@ -330,9 +295,8 @@ int main(int argc, char** argv) {
                         for (const auto& p : pieces[jt.q].poly) qw.push_back(rot_p(p, rot) + t);
                         // 与已放的全部多边形查重叠
                         bool bad = false;
-                        double lim = std::max(ovl_frac * pieces[jt.q].area, ovl_px);
                         for (const auto& pw : st.polys) {
-                            if (overlap_area_limited(pw, qw, lim) > lim) { bad = true; break; }
+                            if (overlap_bad(pw, qw, 3.0)) { bad = true; break; }
                         }
                         if (bad) continue;
                         State ns = st;
