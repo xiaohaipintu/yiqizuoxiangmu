@@ -81,6 +81,26 @@ def parse_bg(value: str):
     return None
 
 
+def mask_quality(mask: np.ndarray, min_area: float) -> float:
+    """给一张掩膜打分（越大越像「几张纸片」），用来在两种抠像方式之间择优。
+
+    关注三件事：有效碎片数、前景覆盖率、有没有一块吃掉全部（粘连/背景没抠掉）。
+    """
+    n, _labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    areas = [int(stats[i, cv2.CC_STAT_AREA]) for i in range(1, n)
+             if int(stats[i, cv2.CC_STAT_AREA]) >= min_area]
+    if not areas:
+        return -1.0
+    cover = float((mask > 0).mean())
+    score = float(len(areas))
+    if cover < 0.01 or cover > 0.85:
+        score -= 3.0                     # 覆盖率离谱（几乎没抠到 / 背景没抠掉）
+    largest = max(areas) / max(sum(areas), 1)
+    if largest > 0.92:
+        score -= 1.5                     # 一块吃掉几乎全部 → 多半粘成一片
+    return score
+
+
 def is_chroma_bg(bg: np.ndarray) -> bool:
     """背景色是否适合**色度键控**（chroma key）——不限绿。
 
@@ -389,13 +409,32 @@ def main() -> int:
             "色度抠像（只用 Lab 的 a/b，忽略亮度 → 阴影/光照不均不会误判为前景）"
             if use_chroma else "Lab 全量 ΔE（背景饱和度低，按整体色差分割）"))
 
+    def _chroma_mask() -> np.ndarray:
+        cdist = chroma_delta(bgr, bg)
+        m = (cdist > args.chroma_hi).astype(np.uint8) * 255
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        return cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+
+    def _lab_mask() -> np.ndarray:
+        return auto_mask(bgr, args.delta_e)
+
     if args.mode == "red":
         mask = red_mask(bgr)
-    elif use_chroma:
-        cdist = chroma_delta(bgr, bg)
-        mask = (cdist > args.chroma_hi).astype(np.uint8) * 255
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+    elif args.mode == "chroma":
+        mask = _chroma_mask()
+    elif args.mode == "auto":
+        # 自适应：按背景饱和度初判，但碎片颜色/背景太接近时这条路可能翻车，
+        # 于是两条路都算一遍，按「像不像几张纸片」择优 —— 不假设碎片是什么颜色。
+        primary, alt = (_chroma_mask(), _lab_mask()) if use_chroma else (_lab_mask(), _chroma_mask())
+        q_primary = mask_quality(primary, args.min_area)
+        q_alt = mask_quality(alt, args.min_area)
+        if q_alt > q_primary + 0.5:
+            print("抠像方式自适应：初判结果可疑（得分 %.1f），改用另一种（得分 %.1f）"
+                  % (q_primary, q_alt))
+            mask = alt
+            use_chroma = not use_chroma
+        else:
+            mask = primary
     else:
         mask = auto_mask(bgr, args.delta_e)
 
