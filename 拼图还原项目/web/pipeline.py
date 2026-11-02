@@ -1107,7 +1107,18 @@ def solve(
     # 3.5) T 型接缝补充搜索：beam 表达不了「短边顶在长边中间」（一条边被两块共用），
     #      而那正是矩形切法的常见形状，不补这一步永远看不到 A2↔B4 这种相邻关系
     split_sols: list = []
-    if notch_sol is None:
+    split_skip = []
+    if notch_sol is not None:
+        split_skip.append("双射先验已直接给出答案")
+    if beam_ok(pick, n_pieces):
+        split_skip.append("常规搜索已达标（对接边长差 ≤ %.0f%%）" % GOOD_LEN_DIFF)
+    if n_pieces > 8:
+        split_skip.append("碎片数 %d 太多，T 型枚举会爆炸" % n_pieces)
+    if any(len(p.get("polygon") or []) > 12 for p in piece_list):
+        split_skip.append("存在顶点过多的复杂碎片")
+    if split_skip:
+        step("split", "跳过 T 型接缝搜索：" + "；".join(split_skip))
+    else:
         try:
             import split_search
             from assemble import Piece as _Piece      # split_search 内部也这么建
