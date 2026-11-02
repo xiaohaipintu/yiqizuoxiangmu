@@ -89,6 +89,17 @@ def mirror_piece(p):
     })
 
 
+def _bbox_gap(e1a, e1b, e2a, e2b) -> float:
+    """两条线段包围盒之间的空隙（用于快速预筛，不做精确判定）。"""
+    ax0, ax1 = (e1a[0], e1b[0]) if e1a[0] <= e1b[0] else (e1b[0], e1a[0])
+    ay0, ay1 = (e1a[1], e1b[1]) if e1a[1] <= e1b[1] else (e1b[1], e1a[1])
+    bx0, bx1 = (e2a[0], e2b[0]) if e2a[0] <= e2b[0] else (e2b[0], e2a[0])
+    by0, by1 = (e2a[1], e2b[1]) if e2a[1] <= e2b[1] else (e2b[1], e2a[1])
+    dx = max(0.0, max(ax0, bx0) - min(ax1, bx1))
+    dy = max(0.0, max(ay0, by0) - min(ay1, by1))
+    return (dx * dx + dy * dy) ** 0.5
+
+
 def _seg_overlap(e1a, e1b, e2a, e2b) -> float:
     """两条线段若近共线，返回重叠长度（否则 0）。"""
     v1 = e1b - e1a
@@ -111,6 +122,33 @@ def _seg_overlap(e1a, e1b, e2a, e2b) -> float:
     t2 = float((e2b - e1a) @ u1)
     lo, hi = min(t1, t2), max(t1, t2)
     return max(0.0, min(hi, L1) - max(lo, 0.0))
+
+
+def joint_badness(joints, pieces) -> float:
+    """已做接缝两侧边长差的平均值（%）。joints: [(pid, ei, qid, fi)]"""
+    if not joints:
+        return 0.0
+    bad = 0.0
+    for pid, ei, qid, fi in joints:
+        la = float(pieces[pid].edges[ei]["length"])
+        lb = float(pieces[qid].edges[fi]["length"])
+        m = min(la, lb)
+        if m > 1e-6:
+            bad += abs(la - lb) / m * 100.0
+    return bad / len(joints)
+
+
+def rect_ratio(polys) -> float:
+    """凸包面积 / 外接矩形面积：越接近 1 越像矩形/方形。"""
+    import cv2
+    pts = np.vstack([np.asarray(p, np.float32) for p in polys])
+    hull = cv2.convexHull(pts.reshape(-1, 1, 2))
+    minx, miny = pts.min(axis=0)
+    maxx, maxy = pts.max(axis=0)
+    box = float((maxx - minx) * (maxy - miny))
+    if box <= 1e-6:
+        return 0.0
+    return float(abs(cv2.contourArea(hull)) / box)
 
 
 def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
@@ -174,6 +212,8 @@ def expand(pieces, placed, polys, used, qid, cov, overlap_tol, mirror_map=None):
                                 oa, ob = pw_other[ej], pw_other[(ej + 1) % o_n]
                                 for fj in range(q.n):
                                     wa, wb = wq[fj], wq[(fj + 1) % q.n]
+                                    if _bbox_gap(wa, wb, oa, ob) > 8.0:
+                                        continue                      # 包围盒都离得远，跳过精确判定
                                     ovl = _seg_overlap(wa, wb, oa, ob)
                                     if ovl <= 1e-6:
                                         continue
@@ -222,13 +262,14 @@ def main() -> int:
     # used[pid][edge] = [(t0,t1)] 已占用区间
     states = [([(seed, 0.0, 0.0, 0.0, False)],
                [world(pieces[seed], 0.0, (0.0, 0.0))],
-               {pid: {} for pid in pieces})]
+               {pid: {} for pid in pieces},
+               [])]
     print(f"碎片 {len(pieces)}，起始块 #{seed}，镜像={'开' if mirror_map else '关'}")
     render_progress(states[0][1], 1, len(pieces), gap_pct(states[0][1]),
                     outdir / "beam_progress.png")
     for level in range(2, len(pieces) + 1):
         cand = []
-        for placed, polys, used in states:
+        for placed, polys, used, joints in states:
             done = {r[0] for r in placed}
             for qid in pieces:
                 if qid in done:
@@ -238,26 +279,42 @@ def main() -> int:
                     nu = {kk: {e: list(v) for e, v in vv.items()} for kk, vv in used.items()}
                     nu[pid].setdefault(ei, []).append((seg0, seg1))
                     nu[qid] = {fi: [(0.0, Lb)]}
+                    nj = joints + [(pid, ei, qid, fi)]
+                    nps = polys + [wq]
+                    g = gap_pct(nps)
+                    # ★ 三指标：空隙小 + 接缝边长吻合 + 轮廓越方越好
+                    key = (g + 1.5 * joint_badness(nj, pieces)
+                           + 60.0 * (1.0 - rect_ratio(nps)))
                     cand.append((placed + [(qid, ang, tx, ty, q_mirror)],
-                                 polys + [wq], nu, gap_pct(polys + [wq])))
+                                 nps, nu, nj, key, g))
             if time.time() > deadline:
                 break
         if not cand:
             print(f"第 {level} 层：无可行扩展")
             break
-        cand.sort(key=lambda s: s[3])
-        states = [(a, b, c) for a, b, c, _ in cand[: args.beam]]
-        n_mir = sum(1 for a, _, _ in states if any((len(r) > 4 and r[4]) for r in a))
-        print(f"第 {level} 层：候选 {len(cand)}，缝最大 {cand[0][3]:.2f}% / "
-              f"保留 {len(states)}（最差 {cand[min(len(cand) - 1, args.beam - 1)][3]:.2f}%）"
-              f"，其中含镜像块 {n_mir}")
-        render_progress(states[0][1], level, len(pieces), cand[0][3],
+        cand.sort(key=lambda s: s[4])
+        kept, seen = [], set()
+        for a, b, c, d, _k, _g in cand:
+            sig = tuple(sorted((int(r[0]), round(float(r[1]) / 5.0),
+                                round(float(r[2]) / 10.0), round(float(r[3]) / 10.0),
+                                bool(r[4]) if len(r) > 4 else False) for r in a))
+            if sig in seen:
+                continue                     # 位姿几乎相同的重复状态，只留一个
+            seen.add(sig)
+            kept.append((a, b, c, d))
+            if len(kept) >= args.beam:
+                break
+        states = kept
+        n_mir = sum(1 for a, _, _, _ in states if any((len(r) > 4 and r[4]) for r in a))
+        print(f"第 {level} 层：候选 {len(cand)}，最好 缝 {cand[0][5]:.2f}%（键 {cand[0][4]:.2f}）/ "
+              f"保留 {len(states)}，其中含镜像块 {n_mir}")
+        render_progress(states[0][1], level, len(pieces), cand[0][5],
                         outdir / "beam_progress.png")
         if time.time() > deadline:
             print("超时，停在当前层")
             break
 
-    full = sorted([(gap_pct(polys), placed, polys) for placed, polys, used in states
+    full = sorted([(gap_pct(polys), placed, polys) for placed, polys, used, joints in states
                    if len(placed) == len(pieces)], key=lambda x: x[0])
     if full:
         n_mirror_sol = sum(1 for _, pl, _ in full if any(len(r) > 4 and r[4] for r in pl))
