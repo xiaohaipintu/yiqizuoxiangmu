@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>随机切割 & 旋转散开 · 一封信</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #0f1014; color: #cfcfd8;
+    font-family: system-ui, "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100%; padding: 16px; box-sizing: border-box; gap: 12px;
+  }
+  canvas { display: block; border-radius: 10px; box-shadow: 0 24px 70px rgba(0,0,0,.7); background: #15151b; }
+  .ui { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  button {
+    background: #5ee7c4; color: #10131a; border: none; font-weight: 700;
+    padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.ghost { background: #2a2b34; color: #e6e6ee; }
+  .stat { font-size: 13px; color: #8b8b96; font-variant-numeric: tabular-nums; }
+  #report {
+    position: fixed; top: 8px; left: 8px; max-width: 90vw; font: 12px/1.4 ui-monospace, Consolas, monospace;
+    color: #9fe; background: rgba(0,0,0,.7); padding: 8px 10px; border-radius: 8px; white-space: pre-wrap;
+    z-index: 20; display: none;
+  }
+  /* render 模式：只留结果图，供截图 */
+  body.render { padding: 0; gap: 0; }
+  body.render .ui, body.render #report { display: none !important; }
+  body.render canvas { border-radius: 0; box-shadow: none; }
+</style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <pre id="report"></pre>
+  <div class="ui">
+    <button id="again">重新随机</button>
+    <button id="dl" class="ghost">下载 PNG</button>
+    <span class="stat" id="stat"></span>
+  </div>
+
+<script>
+/* ============================================================
+   参数
+   ============================================================ */
+const SRC = 760;          // 信纸边长（先画到这块方画布）
+const OUT = 1450;         // 散开后的画布边长
+const NPCS = 60;          // 碎片数（≥50）
+const PAD = 30;           // 信纸内边距
+const FS = 15.5, LH = 26; // 字号 / 行高
+
+if (location.search.indexOf('render') >= 0) document.body.classList.add('render');
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = OUT; canvas.height = OUT;
+canvas.style.width = OUT + 'px'; canvas.style.height = OUT + 'px';
+
+/* ============================================================
+   1. 把信画到方画布（按宽度换行，逐字测量）
+   ============================================================ */
+const letterCanvas = document.createElement('canvas');
+letterCanvas.width = SRC; letterCanvas.height = SRC;
+
+const LETTER = [
+  '亲爱的朋友：', '',
+  '见字如面。', '',
+  '提笔的时候，窗外正好起风，梧桐叶一片接着一片往下落，像谁把一整个秋天轻轻翻了过去。我忽然很想写点什么给你——不为别的，只是觉得有些话，隔着屏幕打出来太轻，非要一笔一画落在纸上，才有一点分量。',
+  '我们已经很久没有好好说过话了。日子过得真快，快到我常常记不清，上一次一起坐在路边、把一整个下午都耗在闲话里，究竟是什么时候。可有些东西好像又没变：你笑到高兴处眼睛会弯成一条缝，你一激动就爱突然提高调门，你总把话说一半，剩下的一半留给我去猜。',
+  '我近来在学着慢下来。从前总觉得，人得一直往前赶，赶着长大，赶着懂事，赶着把每一件事都做得漂漂亮亮。后来才慢慢明白，真正难的从来不是奔跑，而是肯停下来，认真地看一场日落，听一首旧歌，给许久没联系的人写一封不紧不慢的信。',
+  '对了，前些天整理旧物，翻出一张我们那时候的合照，边角都卷了，颜色也淡了。照片里我们都站得笔直，笑得有点傻气。我看了很久，最后把它夹进了一本书里，压平。等哪天你来了，我再拿出来给你看，我们一起笑一笑当年的模样。',
+  '如果你也正忙得晕头转向，就先停一停吧。喝一口水，伸一个懒腰，看看窗外。天塌不下来，事情也永远做不完，可这个下午只有一次。等我写完这封信，也打算出门走走，去那条我们以前常去的巷子，买一杯热的，慢慢地喝完。',
+  '愿你一切都好，愿你被这世界温柔以待，也愿你在累的时候记得，还有我这么一个人，随时等你来敲一敲。',
+  '', '此致', '敬礼', '你的老朋友', '二〇二五年 · 冬',
+];
+
+function drawLetter() {
+  const lc = letterCanvas.getContext('2d');
+  const g = lc.createRadialGradient(0, 0, 40, 0, 0, SRC * 1.25);
+  g.addColorStop(0, '#fffdf7'); g.addColorStop(0.6, '#f7f2e3'); g.addColorStop(1, '#efe8d4');
+  lc.fillStyle = g; lc.fillRect(0, 0, SRC, SRC);
+  // 纸纹
+  lc.save(); lc.globalAlpha = 0.05; lc.strokeStyle = '#7a6a3c';
+  for (let y = 0; y < SRC; y += 4) { lc.beginPath(); lc.moveTo(0, y); lc.lineTo(SRC, y + 0.5); lc.stroke(); }
+  lc.restore();
+
+  lc.fillStyle = '#2a2620';
+  lc.font = `${FS}px "Kaiti SC","STKaiti","Kaiti","KaiTi",serif`;
+  lc.textBaseline = 'top';
+  const maxW = SRC - PAD * 2;
+  let y = PAD;
+  for (const para of LETTER) {
+    if (para === '') { y += LH * 0.6; continue; }
+    let line = '';
+    for (const ch of para) {
+      const test = line + ch;
+      if (lc.measureText(test).width > maxW && line) {
+        lc.fillText(line, PAD, y); y += LH; line = ch;
+      } else line = test;
+    }
+    if (line) { lc.fillText(line, PAD, y); y += LH; }
+  }
+}
+
+/* ============================================================
+   2. 几何工具：凸多边形裁剪 / 面积 / 质心 / SAT 相交
+   ============================================================ */
+// 用半平面 a*x+b*y+c<=0 裁剪凸多边形
+function clipHalf(poly, a, b, c) {
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    const dp = a * p[0] + b * p[1] + c, dq = a * q[0] + b * q[1] + c;
+    if (dp <= 0) out.push(p);
+    if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) {
+      const t = dp / (dp - dq);
+      out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]);
+    }
+  }
+  return out;
+}
+function polyArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return Math.abs(a) / 2;
+}
+function polyCentroid(poly) {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    const cr = p[0] * q[1] - q[0] * p[1];
+    a += cr; cx += (p[0] + q[0]) * cr; cy += (p[1] + q[1]) * cr;
+  }
+  a *= 0.5; cx /= (6 * a); cy /= (6 * a);
+  return [cx, cy];
+}
+// 两个凸多边形是否相交（分离轴定理，边界接触算“不重叠”）
+function convexOverlap(A, B, gap = 0) {
+  for (const P of [A, B]) {
+    for (let i = 0; i < P.length; i++) {
+      const p = P[i], q = P[(i + 1) % P.length];
+      const nx = -(q[1] - p[1]), ny = (q[0] - p[0]);
+      let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
+      for (const v of A) { const d = v[0] * nx + v[1] * ny; if (d < minA) minA = d; if (d > maxA) maxA = d; }
+      for (const v of B) { const d = v[0] * nx + v[1] * ny; if (d < minB) minB = d; if (d > maxB) maxB = d; }
+      // gap>0 时要求留出间隙（更严格的分离），gap=0 即纯不重叠
+      if (maxA + gap <= minB || maxB + gap <= minA) return false;
+    }
+  }
+  return true;
+}
+function rotatePoly(poly, cen, theta, tx, ty) {
+  const c = Math.cos(theta), s = Math.sin(theta);
+  return poly.map(([x, y]) => {
+    const dx = x - cen[0], dy = y - cen[1];
+    return [tx + dx * c - dy * s, ty + dx * s + dy * c];
+  });
+}
+
+/* ============================================================
+   3. Voronoi 随机切割
+   ============================================================ */
+function cellsFor(seeds) {
+  const n = seeds.length, cells = [];
+  for (let i = 0; i < n; i++) {
+    let poly = [[0, 0], [SRC, 0], [SRC, SRC], [0, SRC]];
+    const [xi, yi] = seeds[i];
+    for (let j = 0; j < n && poly.length >= 3; j++) {
+      if (i === j) continue;
+      const [xj, yj] = seeds[j];
+      // 距 i 比 j 近：2(j-i)·p <= |j|²-|i|²  → a=2(xj-xi), b=2(yj-yi), c=-(|j|²-|i|²)
+      const a = 2 * (xj - xi), b = 2 * (yj - yi);
+      const c = -((xj * xj + yj * yj) - (xi * xi + yi * yi));
+      poly = clipHalf(poly, a, b, c);
+    }
+    cells.push(poly);
+  }
+  return cells;
+}
+function randomCells(n) {
+  let seeds = [];
+  for (let i = 0; i < n; i++) seeds.push([Math.random() * SRC, Math.random() * SRC]);
+  // 一次 Lloyd 松弛：种子挪到质心，削掉极端小碎块、让各片大小更均匀（切割仍随机）
+  const c0 = cellsFor(seeds);
+  seeds = c0.map(p => p.length >= 3 ? polyCentroid(p) : [Math.random() * SRC, Math.random() * SRC]);
+  return cellsFor(seeds).filter(p => p.length >= 3 && polyArea(p) > 20);
+}
+
+/* ============================================================
+   4. 散开（随机平移+旋转，SAT 保证不重叠）
+   ============================================================ */
+let placed = null;
+
+function layout(cells) {
+  const polys = cells.map(c => ({ poly: c, cen: polyCentroid(c), area: polyArea(c) }));
+  // 大块优先放，给后面小块留空间
+  polys.sort((a, b) => b.area - a.area);
+  const order = [];
+  let outSide = OUT;
+  const margin = 6;
+
+  for (let attemptSide = 0; attemptSide < 4; attemptSide++) {
+    order.length = 0;
+    const placedPolys = [];
+    let ok = true;
+    for (const pc of polys) {
+      let done = false;
+      // 该块最大半径（质心到顶点最远），用于快速边界判断
+      let R = 0;
+      for (const v of pc.poly) R = Math.max(R, Math.hypot(v[0] - pc.cen[0], v[1] - pc.cen[1]));
+      for (let t = 0; t < 1400 && !done; t++) {
+        const theta = Math.random() * Math.PI * 2;
+        const cx = margin + R + Math.random() * (outSide - 2 * (margin + R));
+        const cy = margin + R + Math.random() * (outSide - 2 * (margin + R));
+        const polyOut = rotatePoly(pc.poly, pc.cen, theta, cx, cy);
+        // 边界
+        let inb = true;
+        for (const v of polyOut) if (v[0] < 0 || v[0] > outSide || v[1] < 0 || v[1] > outSide) { inb = false; break; }
+        if (!inb) continue;
+        // 不重叠
+        let clash = false;
+        for (const pp of placedPolys) if (convexOverlap(polyOut, pp, 7)) { clash = true; break; }
+        if (clash) continue;
+        placedPolys.push(polyOut);
+        order.push({ piece: pc, theta, cx, cy, polyOut });
+        done = true;
+      }
+      if (!done) { ok = false; break; }
+    }
+    if (ok) { return { order, outSide }; }
+    outSide = Math.round(outSide * 1.18);   // 放不下就放大画布重来
+  }
+  return { order, outSide };
+}
+
+/* ============================================================
+   5. 渲染
+   ============================================================ */
+function render(order, outSide) {
+  canvas.width = outSide; canvas.height = outSide;
+  canvas.style.width = outSide + 'px'; canvas.style.height = outSide + 'px';
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const bg = ctx.createRadialGradient(outSide * 0.4, outSide * 0.35, outSide * 0.1, outSide * 0.5, outSide * 0.5, outSide * 0.75);
+  bg.addColorStop(0, '#1b1c24'); bg.addColorStop(1, '#0b0c10');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, outSide, outSide);
+
+  for (const it of order) {
+    const { piece, theta, cx, cy } = it;
+    // 阴影
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate(theta); ctx.translate(-piece.cen[0], -piece.cen[1]);
+    ctx.beginPath(); piece.poly.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath();
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+    ctx.fillStyle = '#000'; ctx.fill();
+    ctx.restore();
+    // 贴信纸纹理 + 裁到本片
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate(theta); ctx.translate(-piece.cen[0], -piece.cen[1]);
+    ctx.beginPath(); piece.poly.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(letterCanvas, 0, 0);
+    // 切边高光
+    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   6. 主流程 + 自测
+   ============================================================ */
+let lastReport = null;
+function generate() {
+  drawLetter();
+  const cells = randomCells(NPCS);
+  const { order, outSide } = layout(cells);
+  render(order, outSide);
+
+  // 自测：最终摆放两两相交数（应为 0）
+  let overlaps = 0;
+  for (let i = 0; i < order.length; i++)
+    for (let j = i + 1; j < order.length; j++)
+      if (convexOverlap(order[i].polyOut, order[j].polyOut)) overlaps++;
+  lastReport = { pieces: order.length, overlaps, outSide };
+  document.getElementById('stat').textContent =
+    `碎片 ${order.length} 片 · 重叠 ${overlaps} 处 · 画布 ${outSide}×${outSide}`;
+  window.__scatterReport = lastReport;
+  if (location.search.indexOf('selftest') >= 0) {
+    const el = document.getElementById('report');
+    el.style.display = 'block';
+    el.textContent = 'SCATTER_RESULT ' + JSON.stringify(lastReport) + ' END_SCATTER';
+  }
+}
+
+document.getElementById('again').onclick = generate;
+document.getElementById('dl').onclick = () => {
+  const a = document.createElement('a');
+  a.download = `letter-scatter-${Date.now()}.png`;
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+};
+
+generate();
+</script>
+</body>
+</html>
