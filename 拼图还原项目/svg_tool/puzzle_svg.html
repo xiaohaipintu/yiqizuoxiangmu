@@ -213,6 +213,14 @@ function dropCollinear(poly, distTol, angleTolDeg) {
   return pts.length >= 3 ? pts : poly;
 }
 
+// 一次「RDP + 去共线」简化，供顶点上限自适应循环反复调用
+function simplifyRing(ring, eps, diag) {
+  let p = rdp(ring, eps);
+  if (p.length < 3) p = ring.slice();
+  p = dropCollinear(p, Math.max(1e-6, 0.010 * diag), 10.0);
+  return p;
+}
+
 
 /* ============================================================
    1. 合成拼图核心（移植自原始 demo，逻辑保持一致）
@@ -777,19 +785,23 @@ function segmentImage(img, opts) {
   for (const bb of comps) {
     const ring = contourOf(bb.label, labels, pw, ph, bb);
     if (!ring) continue;
-    // RDP 简化：eps 随尺寸自适应（先粗简化，再丢近共线尖刺）
+    // 多边形简化：RDP + 去共线；顶点上限按尺寸自适应，防止手撕/毛边炸出上百个顶点
     const diag = Math.hypot(bb.x1 - bb.x0, bb.y1 - bb.y0);
-    const eps = Math.max(1.6, 0.010 * diag);
-    let poly = rdp(ring, eps);
-    if (poly.length < 3) poly = ring;
-    poly = dropCollinear(poly, 0.012 * diag, 9.0);
-    const area = polygonArea(poly);
     const pixArea = bb.area;
-    // 简化后面积必须贴近像素面积，否则退回更细的轮廓（保证抠图不缩水/不鼓包）
-    if (pixArea > 0 && Math.abs(area - pixArea) / pixArea > 0.04) {
-      poly = rdp(ring, eps * 0.45);
-      if (poly.length < 3) poly = ring;
-      poly = dropCollinear(poly, 0.006 * diag, 7.0);
+    const vertCap = Math.max(16, Math.min(60, Math.round(diag / 11)));
+    let eps = Math.max(1.6, 0.010 * diag);
+    let poly = simplifyRing(ring, eps, diag);
+    // 面积偏离像素面积过大 → 先退回更细的轮廓（保证抠图不缩水/不鼓包）
+    if (pixArea > 0 && Math.abs(polygonArea(poly) - pixArea) / pixArea > 0.04)
+      poly = simplifyRing(ring, eps * 0.45, diag);
+    // 顶点仍太多（手撕毛边）→ 逐步加大 eps 压复杂度，面积误差不超 5% 才接受
+    let guard = 0;
+    while (poly.length > vertCap && guard++ < 10) {
+      eps *= 1.3;
+      const cand = simplifyRing(ring, eps, diag);
+      if (cand.length < 3) break;
+      if (pixArea > 0 && Math.abs(polygonArea(cand) - pixArea) / pixArea > 0.05) break;
+      poly = cand;
     }
     // 质心
     let cx = 0, cy = 0;

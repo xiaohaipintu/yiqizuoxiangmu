@@ -64,6 +64,65 @@ def many_small():
     return out
 
 
+def grid_squares(n, side, margin):
+    """n×n 个方格碎片（测碎片数量扩展）。"""
+    step = (W - 2 * margin) / n
+    out = []
+    for r in range(n):
+        for c in range(n):
+            cx = margin + step * (c + 0.5)
+            cy = margin + step * (r + 0.5)
+            h = side / 2
+            out.append([(cx - h, cy - h), (cx + h, cy - h), (cx + h, cy + h), (cx - h, cy + h)])
+    return out
+
+
+def ragged(poly, amp=8.0, nper=8):
+    """把多边形边缘改成手撕般的锯齿/纤维状（法向随机+正弦抖动）。"""
+    poly = np.array(poly, float)
+    out = []
+    n = len(poly)
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        d = b - a
+        L = np.hypot(d[0], d[1]) or 1.0
+        nx, ny = -d[1] / L, d[0] / L
+        for k in range(nper):
+            t = k / nper
+            px, py = a + (b - a) * t
+            off = np.random.uniform(-amp, amp) + amp * 0.5 * np.sin((i + t) * 5.1)
+            out.append((px + nx * off, py + ny * off))
+    return out
+
+
+def add_hairs(img, poly, color, n=30, length=(3, 13)):
+    """在边缘画细短毛刺（手撕纸的纤维），测形态学能不能清掉、别把碎片切碎。"""
+    poly = np.array(poly, float)
+    m = len(poly)
+    for _ in range(n):
+        i = np.random.randint(m)
+        a, b = poly[i], poly[(i + 1) % m]
+        t = np.random.rand()
+        p = a + (b - a) * t
+        d = b - a
+        L = np.hypot(d[0], d[1]) or 1.0
+        nx, ny = -d[1] / L, d[0] / L
+        sgn = 1 if np.random.rand() > 0.5 else -1
+        ln = np.random.uniform(*length)
+        q = p + np.array([nx, ny]) * sgn * ln
+        cv2.line(img, tuple(np.round(p).astype(int)), tuple(np.round(q).astype(int)), color, 1)
+
+
+def palette(n):
+    """远离背景绿的高对比配色（避免碎片颜色撞背景导致整块隐身）。"""
+    base = [
+        (210, 50, 50), (245, 200, 50), (60, 90, 220), (200, 70, 200),
+        (245, 140, 50), (50, 190, 210), (150, 80, 220), (235, 95, 150),
+        (120, 45, 200), (225, 170, 65), (70, 120, 235), (210, 60, 120),
+    ]
+    return [base[i % len(base)] for i in range(n)]
+
+
 # ---------------- 合成 ----------------
 def new_bg(color, grad=False):
     img = np.zeros((H, W, 3), np.float32)
@@ -171,7 +230,39 @@ def main():
     img[sp > 0.9984] = 20
     save("noise", img, 3, "椒盐 + 高斯噪声（形态学应清掉）", outdir)
 
-    print(f"已生成 9 个 case 到 {outdir}")
+    # 10. 多碎片 4×4 = 16 块
+    img = new_bg((60, 190, 70))
+    g16 = grid_squares(4, 150, 60)
+    cols = palette(len(g16))
+    save("pieces_16", draw(img, g16, cols), 16, "16 块（4×4 方格）", outdir)
+
+    # 11. 多碎片 5×5 = 25 块
+    img = new_bg((60, 190, 70))
+    g25 = grid_squares(5, 120, 50)
+    cols = palette(len(g25))
+    save("pieces_25", draw(img, g25, cols), 25, "25 块（5×5 方格）", outdir)
+
+    # 12. 手撕毛边（锯齿 + 纤维 + 软边模糊）
+    torn = [ragged(p, amp=9, nper=8) for p in triangles()]
+    img = new_bg((60, 190, 70))
+    img = draw(img, torn, tri_cols)
+    for p, col in zip(torn, tri_cols):
+        add_hairs(img, p, col, n=36)
+    img = cv2.GaussianBlur(img, (0, 0), 1.0)
+    save("torn_edges", img, 3, "手撕毛边（锯齿+纤维+软边）", outdir)
+
+    # 13. 手撕 + 多碎片（9 块）
+    base = many_small()
+    torn9 = [ragged(p, amp=5, nper=6) for p in base]
+    img = new_bg((60, 190, 70))
+    cols = palette(len(torn9))
+    img = draw(img, torn9, cols)
+    for p, col in zip(torn9, cols):
+        add_hairs(img, p, col, n=18, length=(2, 9))
+    img = cv2.GaussianBlur(img, (0, 0), 0.8)
+    save("torn_many", img, 9, "手撕毛边 + 9 块", outdir)
+
+    print(f"已生成 13 个 case 到 {outdir}")
     for f in sorted(outdir.glob("*.json")):
         d = json.loads(f.read_text(encoding="utf-8"))
         print(f"  {d['name']:<16} gt={d['pieces']}  {d['note']}")
