@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一封信</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    min-height: 100%;
+    background: #14141a;
+    display: flex; align-items: center; justify-content: center;
+    padding: 18px; box-sizing: border-box;
+    font-family: "Kaiti SC", "STKaiti", "Kaiti", "KaiTi", "Songti SC", "SimSun", serif;
+  }
+
+  /* 正方形信纸 */
+  .paper {
+    position: relative;
+    width: min(94vmin, 780px);
+    aspect-ratio: 1 / 1;
+    box-sizing: border-box;
+    padding: 28px 30px 24px;
+    background:
+      radial-gradient(120% 120% at 0% 0%, #fffdf7 0%, #f7f2e3 60%, #efe8d4 100%);
+    color: #2a2620;
+    border-radius: 6px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.6), inset 0 0 60px rgba(180,160,110,.10);
+    overflow: hidden;
+    line-height: 1.72;
+    font-size: 16px;
+    text-align: justify;
+    text-align-last: justify;      /* 每行（含末行）都撑满 → 写满字 */
+    -webkit-hyphens: none;
+    hyphens: none;
+    letter-spacing: .2px;
+  }
+  /* 信纸纤维质感 */
+  .paper::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(120,100,60,.035) 0 1px, transparent 1px 4px),
+      repeating-linear-gradient(90deg, rgba(120,100,60,.025) 0 1px, transparent 1px 4px);
+    mix-blend-mode: multiply;
+  }
+  .salutation { margin: 0 0 6px; font-size: 18px; }
+  .paper p { margin: 0 0 8px; }
+  .paper .sign { margin-top: 10px; }
+  .paper .sign .right { text-align: right; text-align-last: right; }
+  .paper .sign .right + .right { margin-top: 2px; }
+
+  /* raw 模式：整页就是那张方信纸（供截图 / 当作实拍素材） */
+  body.raw { padding: 0; background: #f7f2e3; }
+  body.raw .paper {
+    width: 100vw; height: 100vh; aspect-ratio: auto;
+    border-radius: 0; box-shadow: none;
+  }
+</style>
+</head>
+<body>
+  <div class="paper" id="paper">
+    <p class="salutation">亲爱的朋友：</p>
+
+    <p>见字如面。</p>
+
+    <p>提笔的时候，窗外正好起风，梧桐叶一片接着一片往下落，像谁把一整个秋天轻轻翻了过去。我忽然很想写点什么给你——不为别的，只是觉得有些话，隔着屏幕打出来太轻，非要一笔一画落在纸上，才有一点分量。</p>
+
+    <p>我们已经很久没有好好说过话了。日子过得真快，快到我常常记不清，上一次一起坐在路边、把一整个下午都耗在闲话里，究竟是什么时候。可有些东西好像又没变：你笑到高兴处眼睛会弯成一条缝，你一激动就爱突然提高调门，你总把话说一半，剩下的一半留给我去猜。这些细枝末节，我居然都还记得清清楚楚。</p>
+
+    <p>我近来在学着慢下来。从前总觉得，人得一直往前赶，赶着长大，赶着懂事，赶着把每一件事都做得漂漂亮亮。后来才慢慢明白，真正难的从来不是奔跑，而是肯停下来，认真地看一场日落，听一首旧歌，给许久没联系的人写一封不紧不慢的信。所以我今天坐在这里，把想说的话一句一句写下来，就当是和你好好地坐了一整个下午。</p>
+
+    <p>对了，前些天整理旧物，翻出一张我们那时候的合照，边角都卷了，颜色也淡了。照片里我们都站得笔直，笑得有点傻气。我看了很久，最后把它夹进了一本书里，压平。等哪天你来了，我再拿出来给你看，我们一起笑一笑当年的模样。</p>
+
+    <p>如果你也正忙得晕头转向，就先停一停吧。喝一口水，伸一个懒腰，看看窗外。天塌不下来，事情也永远做不完，可这个下午只有一次。等我写完这封信，也打算出门走走，去那条我们以前常去的巷子，买一杯热的，慢慢地喝完。</p>
+
+    <p>其实写信这件事本身就像一场漫游。写着写着，思绪就飘远了，飘回那些被我们随手丢在身后的日子里。可是没关系，走远了再绕回来，信还在，人还在，这大概就已经很好了。</p>
+
+    <div class="sign">
+      <p>愿你一切都好，愿你被这世界温柔以待，也愿你在累的时候记得，还有我这么一个人，随时等你来敲一敲。</p>
+      <p class="right">此致</p>
+      <p class="right">敬礼</p>
+      <p class="right">你的老朋友</p>
+      <p class="right">二〇二五年 · 冬</p>
+    </div>
+  </div>
+
+  <script>
+    if (location.search.indexOf('raw') >= 0) document.body.classList.add('raw');
+  </script>
+</body>
+</html>
