@@ -177,7 +177,45 @@ def _rigid_fit(q0, q1, P0, P1):
     return R, t
 
 
-def solve(polys, len_tol=1e-6):
+def _samp(img, xy):
+    x, y = float(xy[0]), float(xy[1])
+    xi, yi = int(round(x)), int(round(y))
+    if 0 <= yi < img.shape[0] and 0 <= xi < img.shape[1]:
+        return img[yi, xi].astype(float)
+    return None
+
+
+def _shape_resid(a0, a1, b0, b1, K=12):
+    """两条撕痕边的形状/曲率一致性：把 B 边刚性贴到 A 边，求均残差。
+    直边(合成 Voronoi 边)恒 ~0；手撕曲边/锯齿边靠这个区分形状对不对。"""
+    A = np.linspace(a0, a1, K); B = np.linspace(b0, b1, K)
+    R, t = _rigid_fit(b0, b1, a0, a1)
+    return float(np.linalg.norm(A - (B @ R.T + t), axis=1).mean())
+
+
+def _tex_continuity(scat, a0, a1, cenA, poseA, poseB, d=4.0, K=20):
+    """纹理/内容连续：拼好后接缝两侧各向内取 d 像素，比较画面颜色是否连续。
+    内容能对上=拼对(差值小)；接错边=两边内容错位(差值大)。"""
+    RA, tA = poseA; RB, tB = poseB
+    e = a1 - a0; L = float(np.linalg.norm(e))
+    if L < 1e-6:
+        return 0.0
+    nrm = np.array([-e[1], e[0]]) / L
+    mid = (a0 + a1) / 2
+    if np.dot(nrm, cenA - mid) < 0:
+        nrm = -nrm
+    diffs = []
+    for s in np.linspace(0.15, 0.85, K):
+        p = a0 + e * s
+        ca = _samp(scat, RA.T @ (p + nrm * d - tA))   # A 内侧像
+        cb = _samp(scat, RB.T @ (p - nrm * d - tB))   # 接缝另一侧(B)像
+        if ca is None or cb is None:
+            continue
+        diffs.append(float(np.abs(ca - cb).mean()))
+    return float(np.mean(diffs)) if diffs else 0.0
+
+
+def solve(polys, len_tol=1e-6, scat=None, shape_tol=6.0, tex_tol=75.0):
     n = len(polys)
     # 统一成 CCW，避免绕向不一致时“反向贴边”贴错面
     polys = [p if _signed_area(p) > 0 else p[::-1] for p in polys]
@@ -214,7 +252,7 @@ def solve(polys, len_tol=1e-6):
     placed_polys = {0: polys[0].copy()}
     from collections import deque
     q = deque([0])
-    conflicts = 0
+    shape_rej = 0; tex_rej = 0; tex_vals = []
     while q:
         A = q.popleft()
         RA, tA = pose[A]
@@ -237,6 +275,15 @@ def solve(polys, len_tol=1e-6):
                     pB = transform(polys[B], Rb, tb)
                     if any(convex_overlap(pB, P2, -0.2) for P2 in placed_polys.values()):  # -0.2 容忍共享边浮点
                         continue
+                    # ① 形状/曲率一致性：两条撕痕边的形状须贴合（直边恒成立，曲边/手撕靠这个）
+                    if _shape_resid(ea0, ea1, qb0, qb1) > shape_tol:
+                        shape_rej += 1; continue
+                    # ② 纹理/内容连续：拼好后接缝两侧画面颜色要连续（接错边=内容错位=差值大）
+                    if scat is not None:
+                        td = _tex_continuity(scat, ea0, ea1, placed_polys[A].mean(0), pose[A], (Rb, tb))
+                        tex_vals.append(td)
+                        if td > tex_tol:
+                            tex_rej += 1; continue
                     got = (Rb, tb, pB); break
                 if got is None:
                     continue
@@ -244,6 +291,8 @@ def solve(polys, len_tol=1e-6):
                 pose[B] = (Rb, tb); placed_polys[B] = pB; q.append(B)
                 break
     placed = sum(1 for p in pose if p is not None)
+    print(f"[检测] 形状不通过 {shape_rej} 次, 纹理不连续拒绝 {tex_rej} 次, "
+          f"接缝平均纹理差 {round(float(np.mean(tex_vals)),1) if tex_vals else '-'}")
     return pose, placed, placed_polys
 
 
@@ -359,7 +408,7 @@ def main():
         scat = np.where(m3, warped, scat)
 
     t0 = time.time()
-    pose, placed, placed_polys = solve(polys, args.len_tol)
+    pose, placed, placed_polys = solve(polys, args.len_tol, scat=scat)
     t_solve = time.time() - t0
 
     metrics = evaluate(placed_polys, S)
