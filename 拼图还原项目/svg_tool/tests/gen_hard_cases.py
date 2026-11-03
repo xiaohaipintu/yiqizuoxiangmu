@@ -123,6 +123,50 @@ def palette(n):
     return [base[i % len(base)] for i in range(n)]
 
 
+def draw_letter(w, h):
+    """画一张「手写的信」：米白信纸 + 深色手写笔迹（随机连笔波浪线）。"""
+    img = np.zeros((h, w, 3), np.float32)
+    img[:] = (250, 249, 242)
+    img += np.random.normal(0, 2.5, img.shape)      # 纸张细微纹理
+    ink = (24, 26, 34)                               # 深色笔迹（相对蓝桌布仍是前景）
+    y = 108
+    while y < h - 70:
+        x = 55
+        while x < w - 90:
+            wl = np.random.randint(55, 150)          # 一个「词」的宽度
+            pts = []
+            for k in range(18):
+                t = k / 18
+                pts.append((x + wl * t,
+                            y + np.sin(t * np.pi * 2.3 + np.random.rand()) * np.random.uniform(4, 13)))
+            cv2.polylines(img, [np.round(np.array(pts)).astype(np.int32)], False, ink, 3, cv2.LINE_AA)
+            x += wl + np.random.randint(16, 38)      # 词间距
+        y += 76
+    return img
+
+
+def tear_letter_into_scene(letter, scene, nx, ny, gap=4):
+    """把信纸按 nx×ny 撕成小块（抖动边 + 腐蚀出缝隙），笔迹随碎片一起被撕开。返回块数。"""
+    H2, W2 = letter.shape[:2]
+    ox = (scene.shape[1] - W2) // 2
+    oy = (scene.shape[0] - H2) // 2
+    sub = scene[oy:oy + H2, ox:ox + W2]
+    kern = np.ones((2 * gap + 1, 2 * gap + 1), np.uint8)
+    n = 0
+    for gy in range(ny):
+        for gx in range(nx):
+            x0, x1 = W2 * gx / nx, W2 * (gx + 1) / nx
+            y0, y1 = H2 * gy / ny, H2 * (gy + 1) / ny
+            cell = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+            rg = ragged(cell, amp=2.5, nper=5)       # 手撕般的抖动边
+            m = np.zeros((H2, W2), np.uint8)
+            cv2.fillPoly(m, [np.round(np.array(rg)).astype(np.int32)], 255)
+            m = cv2.erode(m, kern)                    # 缩出缝隙 → 碎片彼此分离
+            sub[m > 0] = letter[m > 0]               # 把信纸上这块的像素贴过来（笔迹连续）
+            n += 1
+    return n
+
+
 # ---------------- 合成 ----------------
 def new_bg(color, grad=False):
     img = np.zeros((H, W, 3), np.float32)
@@ -262,7 +306,19 @@ def main():
     img = cv2.GaussianBlur(img, (0, 0), 0.8)
     save("torn_many", img, 9, "手撕毛边 + 9 块", outdir)
 
-    print(f"已生成 13 个 case 到 {outdir}")
+    # 14. 手写的信被撕成特别碎的小碎片（7×7 = 49 块，笔迹随碎片撕开）
+    letter = draw_letter(760, 760)
+    img = new_bg((50, 80, 130))   # 蓝灰桌布背景
+    nfrag = tear_letter_into_scene(letter, img, nx=7, ny=7, gap=4)
+    save("letter_torn", img, nfrag, f"手写信撕成 {nfrag} 块小碎片（7×7）", outdir)
+
+    # 15. 撕得更碎（10×10 = 100 块，极限压测分辨率/最小面积）
+    letter2 = draw_letter(780, 780)
+    img = new_bg((50, 80, 130))
+    nf2 = tear_letter_into_scene(letter2, img, nx=10, ny=10, gap=6)
+    save("letter_torn_fine", img, nf2, f"手写信撕得更碎 {nf2} 块（10×10）", outdir)
+
+    print(f"已生成 15 个 case 到 {outdir}")
     for f in sorted(outdir.glob("*.json")):
         d = json.loads(f.read_text(encoding="utf-8"))
         print(f"  {d['name']:<16} gt={d['pieces']}  {d['note']}")

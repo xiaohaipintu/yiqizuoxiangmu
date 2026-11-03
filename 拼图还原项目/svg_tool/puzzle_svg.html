@@ -832,15 +832,17 @@ function svgOfReal(seg, texDataURL, texW, texH, sxTex, syTex, spread) {
   const polys = spreadPieces(seg, spread);
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${texW} ${texH}" width="${texW}" height="${texH}">\n`;
   svg += `  <defs>\n`;
+  // 纹理只嵌一次，每块用 <use> 引用 + 各自 clipPath —— 碎片越多越省体积（100 块从 26MB → 几百 KB）
+  svg += `    <image id="tex" href="${texDataURL}" x="0" y="0" width="${texW}" height="${texH}" preserveAspectRatio="none" />\n`;
   polys.forEach((p, i) => {
-    svg += `    <clipPath id="rclip-${i}" clipPathUnits="userSpaceOnUse"><path d="${polyToD(p.poly, sxTex, syTex, p.dx, p.dy)}" /></clipPath>\n`;
+    svg += `    <clipPath id="rclip-${i}" clipPathUnits="userSpaceOnUse"><path d="${polyToD(p.poly, sxTex, syTex, 0, 0)}" /></clipPath>\n`;
   });
   svg += `  </defs>\n`;
   svg += `  <rect width="${texW}" height="${texH}" fill="#0f0f13" />\n`;
   polys.forEach((p, i) => {
-    svg += `  <g>\n`;
-    svg += `    <image href="${texDataURL}" x="${p.dx}" y="${p.dy}" width="${texW}" height="${texH}" preserveAspectRatio="none" clip-path="url(#rclip-${i})" />\n`;
-    svg += `    <path d="${polyToD(p.poly, sxTex, syTex, p.dx, p.dy)}" fill="none" stroke="rgba(94,231,196,0.85)" stroke-width="1.5" />\n`;
+    svg += `  <g transform="translate(${p.dx}, ${p.dy})">\n`;
+    svg += `    <use href="#tex" clip-path="url(#rclip-${i})" />\n`;
+    svg += `    <path d="${polyToD(p.poly, sxTex, syTex, 0, 0)}" fill="none" stroke="rgba(94,231,196,0.85)" stroke-width="1.5" />\n`;
     svg += `  </g>\n`;
   });
   svg += `</svg>`;
