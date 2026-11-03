@@ -291,6 +291,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, f.read_bytes(), "text/html; charset=utf-8")
             return
 
+        if path in ("/two", "/two.html"):
+            f = WEB_DIR / "two.html"
+            if not f.exists():
+                self._send(500, b"two.html missing", "text/plain; charset=utf-8")
+                return
+            self._send(200, f.read_bytes(), "text/html; charset=utf-8")
+            return
+
         if path in ("/jobs", "/jobs.html"):
             if not JOBS_FILE.exists():
                 self._send(500, b"jobs.html missing", "text/plain; charset=utf-8")
@@ -434,6 +442,26 @@ class Handler(BaseHTTPRequestHandler):
                 job["step"] = "已暂停"
             log_event(f"任务 {job_id} 收到暂停请求")
             self._json(200, {"id": job_id, "cancelled": True})
+            return
+        if path == "/api/two":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                self._json(400, {"error": "没有收到图片数据"}); return
+            if length > MAX_UPLOAD:
+                self._json(413, {"error": f"图片太大（上限 {MAX_UPLOAD // 1024 // 1024}MB）"}); return
+            data = self.rfile.read(length)
+            import tempfile as _tf, pathlib as _pl, numpy as _np, cv2 as _cv
+            tmpd = _pl.Path(_tf.mkdtemp(prefix="two-upload-"))
+            up = tmpd / "upload.jpg"; up.write_bytes(data)
+            if _cv.imdecode(_np.frombuffer(data, _np.uint8), _cv.IMREAD_COLOR) is None:
+                self._json(400, {"error": "无法识别这张图片，请换成 JPG/PNG"}); return
+            try:
+                import two_join
+                res = two_join.assemble(str(up))
+                self._json(200, res)
+            except Exception as exc:
+                traceback.print_exc()
+                self._json(500, {"error": str(exc)})
             return
         if path != "/api/solve":
             self._json(404, {"error": "not found"})
