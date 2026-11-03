@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 BASE = pathlib.Path("拼图还原项目/svg_tool/test_out")
-SRC = BASE / "poly_solve"
+SRC = BASE / (sys.argv[1] if len(sys.argv) > 1 else "poly_solve")
 
 
 def rd(p):
