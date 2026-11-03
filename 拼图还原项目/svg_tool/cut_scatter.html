@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>切图散开 · 生成拼图 PNG</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background:#0f1014; color:#cfcfd8; font-family:system-ui,"Microsoft YaHei",sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    min-height:100%; padding:16px; box-sizing:border-box; gap:12px; }
+  canvas { display:block; border-radius:10px; box-shadow:0 24px 70px rgba(0,0,0,.7); background:#15151b; max-width:92vw; height:auto; }
+  .ui { display:flex; gap:12px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  button, .filebtn { background:#5ee7c4; color:#10131a; border:none; font-weight:700;
+    padding:8px 16px; border-radius:8px; cursor:pointer; font-size:14px; font-family:inherit; }
+  button:hover, .filebtn:hover { filter:brightness(1.08); }
+  button.ghost { background:#2a2b34; color:#e6e6ee; }
+  input[type=file]{ display:none; }
+  input[type=range]{ width:120px; accent-color:#5ee7c4; }
+  .stat { font-size:13px; color:#8b8b96; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="ui">
+    <label class="filebtn">上传图片<input id="file" type="file" accept="image/*"></label>
+    <span>片数</span><input id="npc" type="range" min="8" max="150" value="60"><span id="npcv" class="stat">60</span>
+    <button id="again">重新随机</button>
+    <button id="dl" class="ghost">下载散落PNG</button>
+    <button id="dlsrc" class="ghost">下载原图PNG</button>
+    <span class="stat" id="stat"></span>
+  </div>
+
+<script>
+const SRC = 760;          // 源方图边长（纹理）
+let OUT = 1450;           // 散开画布边长（放不下会自动放大）
+let NPCS = 60;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const srcCanvas = document.createElement('canvas');
+srcCanvas.width = SRC; srcCanvas.height = SRC;
+const sctx = srcCanvas.getContext('2d');
+
+/* ---------- 默认占位图（未上传时） ---------- */
+function drawDefault(){
+  const g = sctx.createLinearGradient(0,0,SRC,SRC);
+  g.addColorStop(0,'#ff9a76'); g.addColorStop(.5,'#5ee7c4'); g.addColorStop(1,'#6a8cff');
+  sctx.fillStyle=g; sctx.fillRect(0,0,SRC,SRC);
+  for(let i=0;i<40;i++){
+    sctx.fillStyle=`hsl(${Math.random()*360},70%,60%)`;
+    sctx.beginPath(); sctx.arc(Math.random()*SRC,Math.random()*SRC,8+Math.random()*46,0,7); sctx.fill();
+  }
+}
+/* ---------- 上传图 cover 裁成正方形 ---------- */
+function drawImageCover(img){
+  const ir = img.width/img.height; let sw,sh,sx,sy;
+  if(ir>1){ sh=img.height; sw=sh; sx=(img.width-sw)/2; sy=0; } else { sw=img.width; sh=sw; sx=0; sy=(img.height-sh)/2; }
+  sctx.clearRect(0,0,SRC,SRC);
+  sctx.drawImage(img, sx,sy,sw,sh, 0,0,SRC,SRC);
+}
+
+/* ---------- 几何工具 ---------- */
+function clipHalf(poly,a,b,c){ const out=[]; for(let i=0;i<poly.length;i++){ const p=poly[i],q=poly[(i+1)%poly.length]; const dp=a*p[0]+b*p[1]+c, dq=a*q[0]+b*q[1]+c;
+  if(dp<=0) out.push(p); if((dp<0&&dq>0)||(dp>0&&dq<0)){ const t=dp/(dp-dq); out.push([p[0]+t*(q[0]-p[0]), p[1]+t*(q[1]-p[1])]); } } return out; }
+function polyArea(poly){ let a=0; for(let i=0;i<poly.length;i++){ const p=poly[i],q=poly[(i+1)%poly.length]; a+=p[0]*q[1]-q[0]*p[1]; } return Math.abs(a)/2; }
+function polyCentroid(poly){ let a=0,cx=0,cy=0; for(let i=0;i<poly.length;i++){ const p=poly[i],q=poly[(i+1)%poly.length]; const cr=p[0]*q[1]-q[0]*p[1]; a+=cr; cx+=(p[0]+q[0])*cr; cy+=(p[1]+q[1])*cr; } a*=0.5; return [cx/(6*a), cy/(6*a)]; }
+function convexOverlap(A,B,gap=0){ for(const P of [A,B]){ for(let i=0;i<P.length;i++){ const p=P[i],q=P[(i+1)%P.length]; const nx=-(q[1]-p[1]),ny=(q[0]-p[0]); let minA=1e18,maxA=-1e18,minB=1e18,maxB=-1e18;
+  for(const v of A){const d=v[0]*nx+v[1]*ny; if(d<minA)minA=d; if(d>maxA)maxA=d;} for(const v of B){const d=v[0]*nx+v[1]*ny; if(d<minB)minB=d; if(d>maxB)maxB=d;}
+  if(maxA+gap<=minB||maxB+gap<=minA) return false; } } return true; }
+function rotatePoly(poly,cen,theta,tx,ty){ const c=Math.cos(theta),s=Math.sin(theta); return poly.map(([x,y])=>{ const dx=x-cen[0],dy=y-cen[1]; return [tx+dx*c-dy*s, ty+dx*s+dy*c]; }); }
+
+/* ---------- Voronoi 切割 ---------- */
+function cellsFor(seeds){ const n=seeds.length,cells=[]; for(let i=0;i<n;i++){ let poly=[[0,0],[SRC,0],[SRC,SRC],[0,SRC]]; const [xi,yi]=seeds[i];
+  for(let j=0;j<n&&poly.length>=3;j++){ if(i===j)continue; const [xj,yj]=seeds[j]; const a=2*(xj-xi),b=2*(yj-yi),c=-((xj*xj+yj*yj)-(xi*xi+yi*yi)); poly=clipHalf(poly,a,b,c); } cells.push(poly); } return cells; }
+function randomCells(n){ let seeds=[]; for(let i=0;i<n;i++) seeds.push([Math.random()*SRC,Math.random()*SRC]);
+  const c0=cellsFor(seeds); seeds=c0.map(p=>p.length>=3?polyCentroid(p):[Math.random()*SRC,Math.random()*SRC]);
+  return cellsFor(seeds).filter(p=>p.length>=3 && polyArea(p)>20); }
+
+/* ---------- 散开（随机旋转+平移，SAT 不重叠） ---------- */
+function layout(cells){
+  const polys=cells.map(c=>({poly:c,cen:polyCentroid(c),area:polyArea(c)})); polys.sort((a,b)=>b.area-a.area);
+  let outSide=OUT; const margin=6;
+  for(let attempt=0; attempt<5; attempt++){
+    const order=[]; const placed=[]; let ok=true;
+    for(const pc of polys){ let done=false; let R=0; for(const v of pc.poly) R=Math.max(R,Math.hypot(v[0]-pc.cen[0],v[1]-pc.cen[1]));
+      for(let t=0;t<1600&&!done;t++){ const theta=Math.random()*Math.PI*2; const cx=margin+R+Math.random()*(outSide-2*(margin+R)); const cy=margin+R+Math.random()*(outSide-2*(margin+R));
+        const polyOut=rotatePoly(pc.poly,pc.cen,theta,cx,cy); let inb=true; for(const v of polyOut) if(v[0]<0||v[0]>outSide||v[1]<0||v[1]>outSide){inb=false;break;} if(!inb)continue;
+        let clash=false; for(const pp of placed) if(convexOverlap(polyOut,pp,7)){clash=true;break;} if(clash)continue;
+        placed.push(polyOut); order.push({piece:pc,theta,cx,cy}); done=true; }
+      if(!done){ ok=false; break; } }
+    if(ok) return {order, outSide}; outSide=Math.round(outSide*1.18);
+  }
+  return {order:[], outSide};
+}
+
+/* ---------- 渲染 ---------- */
+function render(order, outSide){
+  canvas.width=outSide; canvas.height=outSide; canvas.style.width=outSide+'px'; canvas.style.height=outSide+'px';
+  ctx.setTransform(1,0,0,1,0,0);
+  const bg=ctx.createRadialGradient(outSide*.4,outSide*.35,outSide*.1,outSide*.5,outSide*.5,outSide*.75);
+  bg.addColorStop(0,'#1b1c24'); bg.addColorStop(1,'#0b0c10'); ctx.fillStyle=bg; ctx.fillRect(0,0,outSide,outSide);
+  for(const it of order){ const {piece,theta,cx,cy}=it;
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(theta); ctx.translate(-piece.cen[0],-piece.cen[1]);
+    ctx.beginPath(); piece.poly.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath();
+    ctx.shadowColor='rgba(0,0,0,.45)'; ctx.shadowBlur=10; ctx.shadowOffsetY=3; ctx.fillStyle='#000'; ctx.fill(); ctx.restore();
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(theta); ctx.translate(-piece.cen[0],-piece.cen[1]);
+    ctx.beginPath(); piece.poly.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.clip();
+    ctx.drawImage(srcCanvas,0,0);
+    ctx.strokeStyle='rgba(255,255,255,.22)'; ctx.lineWidth=1; ctx.stroke(); ctx.restore();
+  }
+}
+
+/* ---------- 主流程 ---------- */
+let lastReport=null;
+function generate(){
+  const cells=randomCells(NPCS);
+  const {order,outSide}=layout(cells);
+  render(order,outSide);
+  lastReport={pieces:order.length, outSide};
+  document.getElementById('stat').textContent=`${order.length} 片 · 画布 ${outSide}×${outSide}`;
+  if(location.search.indexOf('selftest')>=0){ window.__scatterReport=lastReport;
+    document.title='SCATTER_RESULT '+JSON.stringify(lastReport)+' END_SCATTER'; }
+}
+
+document.getElementById('npc').addEventListener('input',e=>{ NPCS=+e.target.value; document.getElementById('npcv').textContent=NPCS; });
+document.getElementById('again').onclick=generate;
+document.getElementById('dl').onclick=()=>{ const a=document.createElement('a'); a.download=`scatter-${NPCS}pcs-${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click(); };
+document.getElementById('dlsrc').onclick=()=>{ const a=document.createElement('a'); a.download=`source-${Date.now()}.png`; a.href=srcCanvas.toDataURL('image/png'); a.click(); };
+document.getElementById('file').addEventListener('change',e=>{
+  const f=e.target.files&&e.target.files[0]; if(!f) return; const img=new Image();
+  img.onload=()=>{ drawImageCover(img); generate(); }; img.onerror=()=>alert('图片加载失败');
+  img.src=URL.createObjectURL(f);
+});
+
+drawDefault(); generate();
+</script>
+</body>
+</html>
