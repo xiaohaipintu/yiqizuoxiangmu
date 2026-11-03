@@ -257,13 +257,6 @@
       </label>
     </div>
 
-    <div class="row" style="margin-top: 12px;">
-      <span class="label">有凹形碎片（弯边/缺角）</span>
-      <div class="seg" id="concave-seg">
-        <button type="button" data-v="1" class="on">是</button>
-        <button type="button" data-v="0">否</button>
-      </div>
-    </div>
     <p class="label" style="margin: 10px 0 0; line-height: 1.6;">
       搜索时长由服务器按碎片数量和形状自动决定，拼得不够吻合会自己加时重搜，不用你操心。
     </p>
@@ -384,7 +377,6 @@
   var dropZone = $('drop-zone');
   var fileInput = $('file');
 
-  var concave = '1';
   var polling = null;
   var timer = null;
   var currentJobId = null;
@@ -394,13 +386,6 @@
   var livePinned = null;       // 用户手动选的预览阶段；选了就不再自动跟到最新
   var liveJobId = null;
   // ---------- 参数选择 ----------
-  $('concave-seg').addEventListener('click', function (e) {
-    var b = e.target.closest('button[data-v]');
-    if (!b) return;
-    concave = b.dataset.v;
-    [].forEach.call(this.children, function (x) { x.classList.toggle('on', x === b); });
-  });
-
   $('label-seg').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-v]');
     if (!b) return;
@@ -574,7 +559,7 @@
     fetch('api/solve', {
       method: 'POST',
       headers: (function () {
-        var h = { 'Content-Type': 'image/jpeg', 'X-Concave': concave };
+        var h = { 'Content-Type': 'image/jpeg' };
         var bg = (typeof window.__jigsawBg === 'function') ? window.__jigsawBg() : '';
         if (bg) h['X-Bg-Color'] = bg;        // 空 = 自动；'off' = 无纯色背景；其它 = RRGGBB
         return h;
