@@ -66,6 +66,7 @@ python src/angle_match.py --pieces out5/pieces_scaled.json --out out5 --tol-deg 
 | `verify_closure.py` | 栅格化重叠 / 空洞验证 |
 | `analyze_edges.py` / `inspect_vertices.py` / `diag_poly.py` | 边 / 顶点 / 多边形拟合诊断 |
 | `render.py` / `render_all.py` / `render_attempt.py` | 拼合结果可视化 |
+| `photo_to_svg.py` | **实拍抠组件 → SVG**：复用 `segment.py` 的抠像/多边形拟合，导出整图 `photo_puzzle.svg` + 逐块 `piece_<id>.svg`（另见网页版 `svg_tool/puzzle_svg.html`，详见 `svg_tool/README.md`） |
 
 ## 5. 各样例结果
 

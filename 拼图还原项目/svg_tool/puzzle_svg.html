@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>拼图切割 / 实拍抠组件 → SVG</title>
+<style>
+  html, body {
+    margin: 0; min-height: 100%;
+    background: #1a1a1e;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: auto; padding: 30px 20px 120px; box-sizing: border-box;
+  }
+
+  canvas {
+    display: block;
+    border-radius: 14px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.75);
+    transition: transform 0.2s ease-out;
+    transform-origin: center center;
+    background: #111;
+  }
+
+  .ui {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    color: #8b8b96; font-size: 14px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 24px);
+    user-select: none; z-index: 10;
+    background: rgba(26, 26, 30, 0.9);
+    backdrop-filter: blur(10px);
+    padding: 10px 18px;
+    border-radius: 22px;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+
+  input[type=range] { width: 96px; accent-color: #5ee7c4; cursor: pointer; }
+
+  select {
+    background: #2c2c35; color: #e0e0e8;
+    border: 1px solid #444450; border-radius: 6px;
+    padding: 4px 8px; font-size: 14px; outline: none; cursor: pointer;
+  }
+  select:hover { background: #3a3a45; }
+
+  .divider { width: 1px; height: 20px; background: rgba(255,255,255,0.15); margin: 0 4px; }
+
+  button, .filebtn {
+    background: #2c2c35; color: #e0e0e8;
+    border: 1px solid #444450; border-radius: 6px;
+    padding: 5px 11px; font-size: 14px; cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    font-family: inherit;
+  }
+  button:hover, .filebtn:hover { background: #3a3a45; }
+  button:active, .filebtn:active { background: #22222a; transform: scale(0.95); }
+  button.active { background: #5ee7c4; color: #1a1a1e; border-color: #5ee7c4; font-weight: bold; }
+
+  #zoom-val { width: 44px; text-align: center; display: inline-block; font-variant-numeric: tabular-nums; }
+
+  .btn-primary { background: #5ee7c4; color: #1a1a1e; border-color: #5ee7c4; font-weight: bold; }
+  .btn-primary:hover { background: #7df0d2; }
+
+  .grp { display: flex; gap: 8px; align-items: center; }
+  .hidden { display: none !important; }
+
+  #report {
+    position: fixed; top: 8px; left: 8px; max-width: 90vw; max-height: 40vh;
+    overflow: auto; font: 12px/1.4 ui-monospace, Consolas, monospace;
+    color: #9fe; background: rgba(0,0,0,.7); padding: 8px 10px; border-radius: 8px;
+    white-space: pre-wrap; z-index: 20; display: none;
+  }
+  .hint { color:#6b6b78; font-size:12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<pre id="report"></pre>
+
+<div class="ui">
+  <div class="grp" id="mode-grp">
+    <button id="mode-synth" class="active">合成拼图</button>
+    <button id="mode-real">实拍抠图</button>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- 合成模式控制 -->
+  <div class="grp" id="synth-ctrl">
+    <span>边缘</span>
+    <select id="edge-select">
+      <option value="mixed" selected>混合</option>
+      <option value="classic">经典圆头</option>
+      <option value="dovetail">燕尾榫</option>
+      <option value="wave">平滑波浪</option>
+      <option value="arc">圆弧</option>
+      <option value="straight">平直直角</option>
+    </select>
+    <span>分离</span><input id="spread" type="range" min="0" max="120" value="0">
+  </div>
+
+  <!-- 实拍模式控制 -->
+  <div class="grp hidden" id="real-ctrl">
+    <label class="filebtn">选择图片<input id="file" type="file" accept="image/*" class="hidden"></label>
+    <span>色差</span><input id="deltae" type="range" min="12" max="90" value="40">
+    <span id="deltae-val">40</span>
+    <span>最小面积</span><input id="minarea" type="range" min="4" max="80" value="20">
+    <span id="minarea-val">0.2%</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <span>缩放</span>
+  <button id="zoom-out" title="缩小">−</button>
+  <span id="zoom-val">100%</span>
+  <button id="zoom-in" title="放大">+</button>
+
+  <div class="divider"></div>
+
+  <button id="download-png-btn" class="btn-primary">下载 PNG</button>
+  <button id="download-svg-btn" class="btn-primary">下载 SVG</button>
+  <button id="download-pieces-btn" class="btn-primary hidden">逐块下载 SVG</button>
+</div>
+
+<script>
+/* ============================================================
+   0. 通用工具
+   ============================================================ */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+// sRGB -> 线性 的 256 项查表（Lab 换算用）
+const LIN = new Float32Array(256);
+for (let i = 0; i < 256; i++) {
+  const c = i / 255;
+  LIN[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+function _f(t){ return t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116); }
+function rgb2lab(r, g, b) {
+  const rl = LIN[r], gl = LIN[g], bl = LIN[b];
+  const X = (0.4124564*rl + 0.3575761*gl + 0.1804375*bl) / 0.95047;
+  const Y = (0.2126729*rl + 0.7151522*gl + 0.0721750*bl);
+  const Z = (0.0193339*rl + 0.1191920*gl + 0.9503041*bl) / 1.08883;
+  const fx = _f(X), fy = _f(Y), fz = _f(Z);
+  return [116*fy - 16, 500*(fx - fy), 200*(fy - fz)];
+}
+
+function polygonArea(poly) {
+  let a = 0;
+  for (let i = 0, n = poly.length; i < n; i++) {
+    const p = poly[i], q = poly[(i + 1) % n];
+    a += p[0]*q[1] - q[0]*p[1];
+  }
+  return Math.abs(a) / 2;
+}
+
+// Ramer–Douglas–Peucker
+function rdp(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i0, i1] = stack.pop();
+    const ax = pts[i0][0], ay = pts[i0][1], bx = pts[i1][0], by = pts[i1][1];
+    const dx = bx - ax, dy = by - ay;
+    const L2 = dx*dx + dy*dy || 1e-9;
+    let maxD = -1, idx = -1;
+    for (let i = i0 + 1; i < i1; i++) {
+      const px = pts[i][0] - ax, py = pts[i][1] - ay;
+      let t = (px*dx + py*dy) / L2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const ex = px - t*dx, ey = py - t*dy;
+      const d = Math.hypot(ex, ey);
+      if (d > maxD) { maxD = d; idx = i; }
+    }
+    if (maxD > eps && idx > 0) {
+      keep[idx] = 1;
+      stack.push([i0, idx]);
+      stack.push([idx, i1]);
+    }
+  }
+  const out = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
+// 丢掉近共线 / 距离过近的顶点（消除拍照轮廓的锯齿尖刺），保留真实拐角
+function dropCollinear(poly, distTol, angleTolDeg) {
+  let pts = poly.slice();
+  const cosTol = Math.cos((180 - angleTolDeg) * Math.PI / 180);
+  let changed = true;
+  while (changed && pts.length > 3) {
+    changed = false;
+    for (let i = 0; i < pts.length && pts.length > 3; i++) {
+      const a = pts[(i - 1 + pts.length) % pts.length];
+      const b = pts[i];
+      const c = pts[(i + 1) % pts.length];
+      const abx = b[0]-a[0], aby = b[1]-a[1];
+      const bcx = c[0]-b[0], bcy = c[1]-b[1];
+      const lab = Math.hypot(abx, aby), lbc = Math.hypot(bcx, bcy);
+      if (lab < 1e-6 || lbc < 1e-6) { pts.splice(i, 1); changed = true; i--; continue; }
+      const cosA = (abx*bcx + aby*bcy) / (lab*lbc); // 两段同向→1（几乎笔直）
+      // 顶点到 a-c 弦的垂距
+      const acx = c[0]-a[0], acy = c[1]-a[1];
+      const lac = Math.hypot(acx, acy) || 1e-6;
+      const perp = Math.abs(abx*acy - aby*acx) / lac;
+      if (cosA > cosTol && perp < distTol) { pts.splice(i, 1); changed = true; i--; }
+    }
+  }
+  return pts.length >= 3 ? pts : poly;
+}
+
+
+/* ============================================================
+   1. 合成拼图核心（移植自原始 demo，逻辑保持一致）
+   ============================================================ */
+const COLS = 5, ROWS = 4;
+const CW = 200, CH = 150;
+const W = COLS * CW, H = ROWS * CH;
+const PAD = 150;
+const CANVAS_W = W + PAD * 2;
+const CANVAS_H = H + PAD * 2;
+
+const canvas = document.getElementById('c');
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+let ctx = canvas.getContext('2d');
+
+const rnd = mulberry32(20240607);
+
+const templates = {
+  classic: [
+    { t:'L', to:[0.40, 0.00] },
+    { t:'C', c1:[0.44, 0.02], c2:[0.36, 0.08], to:[0.40, 0.12] },
+    { t:'C', c1:[0.32, 0.16], c2:[0.34, 0.30], to:[0.50, 0.30] },
+    { t:'C', c1:[0.66, 0.30], c2:[0.68, 0.16], to:[0.60, 0.12] },
+    { t:'C', c1:[0.64, 0.08], c2:[0.56, 0.02], to:[0.60, 0.00] },
+    { t:'L', to:[1, 0] }
+  ],
+  dovetail: [
+    { t:'L', to:[0.35, 0.00] },
+    { t:'C', c1:[0.40, 0.05], c2:[0.25, 0.20], to:[0.35, 0.25] },
+    { t:'C', c1:[0.45, 0.30], c2:[0.55, 0.30], to:[0.65, 0.25] },
+    { t:'C', c1:[0.75, 0.20], c2:[0.60, 0.05], to:[0.65, 0.00] },
+    { t:'L', to:[1, 0] }
+  ],
+  wave: [
+    { t:'C', c1:[0.15, 0.15], c2:[0.35, -0.15], to:[0.50, 0.00] },
+    { t:'C', c1:[0.65, 0.15], c2:[0.85, -0.15], to:[1.00, 0.00] }
+  ],
+  arc: [
+    { t:'L', to:[0.10, 0.00] },
+    { t:'C', c1:[0.15, 0.35], c2:[0.85, 0.35], to:[0.90, 0.00] },
+    { t:'L', to:[1, 0] }
+  ]
+};
+function getRandomTemplate() {
+  const keys = ['classic', 'dovetail', 'wave', 'arc'];
+  return templates[keys[Math.floor(Math.random() * keys.length)]];
+}
+function buildEdge(A, B, sign, segsTemplate) {
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const L = Math.hypot(dx, dy);
+  const ux = dx / L, uy = dy / L;
+  const nx = uy, ny = -ux;
+  const M = ([t, y]) => ({
+    x: A.x + ux * L * t + nx * L * y * sign,
+    y: A.y + uy * L * t + ny * L * y * sign,
+  });
+  const e = { start: { x: A.x, y: A.y }, segs: [] };
+  for (const s of segsTemplate) {
+    e.segs.push(s.t === 'L'
+      ? { t:'L', to: M(s.to) }
+      : { t:'C', c1: M(s.c1), c2: M(s.c2), to: M(s.to) });
+  }
+  return e;
+}
+function buildStraight(A, B) {
+  return { start: { x:A.x, y:A.y }, segs: [{ t:'L', to:{ x:B.x, y:B.y } }] };
+}
+function reverseEdge(e) {
+  const pts = [e.start];
+  for (const s of e.segs) pts.push(s.to);
+  const out = { start: pts[pts.length - 1], segs: [] };
+  for (let i = e.segs.length - 1; i >= 0; i--) {
+    const s = e.segs[i], to = pts[i];
+    out.segs.push(s.t === 'L' ? { t:'L', to } : { t:'C', c1: s.c2, c2: s.c1, to });
+  }
+  return out;
+}
+
+const signsH = [], signsV = [];
+for (let j = 0; j <= ROWS; j++) {
+  signsH[j] = [];
+  for (let i = 0; i < COLS; i++) signsH[j][i] = rnd() < 0.5 ? -1 : 1;
+}
+for (let j = 0; j < ROWS; j++) {
+  signsV[j] = [];
+  for (let i = 0; i <= COLS; i++) signsV[j][i] = rnd() < 0.5 ? -1 : 1;
+}
+
+const OFF_PAD = Math.ceil(Math.max(CW, CH) * 0.4);
+const PW = CW + OFF_PAD * 2;
+const PH = CH + OFF_PAD * 2;
+const srcCanvas = document.createElement('canvas');
+srcCanvas.width = W; srcCanvas.height = H;
+
+let pieces = [];
+let currentPathsD = [];
+
+function drawSourceTexture() {
+  const s = srcCanvas.getContext('2d');
+  const g = s.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0,    '#ff9a76');
+  g.addColorStop(0.35, '#ffd36e');
+  g.addColorStop(0.70, '#5ee7c4');
+  g.addColorStop(1,    '#6a8cff');
+  s.fillStyle = g;
+  s.fillRect(0, 0, W, H);
+  s.globalAlpha = 0.3;
+  s.strokeStyle = '#fff';
+  for (let i = 0; i < 60; i++) {
+    s.lineWidth = 1 + rnd() * 3;
+    s.beginPath();
+    s.arc(rnd()*W, rnd()*H, 10 + rnd()*70, 0, Math.PI*2);
+    s.stroke();
+  }
+  s.globalAlpha = 1;
+}
+drawSourceTexture();
+
+function buildPuzzle(mode) {
+  const H_edges = [], V_edges = [];
+  for (let j = 0; j <= ROWS; j++) {
+    H_edges[j] = [];
+    for (let i = 0; i < COLS; i++) {
+      const A = { x: i*CW, y: j*CH }, B = { x: (i+1)*CW, y: j*CH };
+      if (mode === 'straight' || j === 0 || j === ROWS) H_edges[j][i] = buildStraight(A, B);
+      else {
+        const tpl = (mode === 'mixed') ? getRandomTemplate() : templates[mode];
+        H_edges[j][i] = buildEdge(A, B, signsH[j][i], tpl);
+      }
+    }
+  }
+  for (let j = 0; j < ROWS; j++) {
+    V_edges[j] = [];
+    for (let i = 0; i <= COLS; i++) {
+      const A = { x: i*CW, y: j*CH }, B = { x: i*CW, y: (j+1)*CH };
+      if (mode === 'straight' || i === 0 || i === COLS) V_edges[j][i] = buildStraight(A, B);
+      else {
+        const tpl = (mode === 'mixed') ? getRandomTemplate() : templates[mode];
+        V_edges[j][i] = buildEdge(A, B, signsV[j][i], tpl);
+      }
+    }
+  }
+
+  pieces = [];
+  currentPathsD = [];
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const p = new Path2D();
+      let dStr = '';
+      const seq = [
+        [H_edges[r][c],     false],
+        [V_edges[r][c + 1], false],
+        [H_edges[r + 1][c], true ],
+        [V_edges[r][c],     true ],
+      ];
+      let first = true;
+      for (const [e, rev] of seq) {
+        const ee = rev ? reverseEdge(e) : e;
+        if (first) { p.moveTo(ee.start.x, ee.start.y); dStr += `M ${ee.start.x} ${ee.start.y} `; first = false; }
+        else { p.lineTo(ee.start.x, ee.start.y); dStr += `L ${ee.start.x} ${ee.start.y} `; }
+        for (const s of ee.segs) {
+          if (s.t === 'L') { p.lineTo(s.to.x, s.to.y); dStr += `L ${s.to.x} ${s.to.y} `; }
+          else { p.bezierCurveTo(s.c1.x, s.c1.y, s.c2.x, s.c2.y, s.to.x, s.to.y);
+                 dStr += `C ${s.c1.x} ${s.c1.y} ${s.c2.x} ${s.c2.y} ${s.to.x} ${s.to.y} `; }
+        }
+      }
+      p.closePath();
+      dStr += 'Z';
+      currentPathsD.push(dStr);
+
+      const off = document.createElement('canvas');
+      off.width  = PW * DPR;
+      off.height = PH * DPR;
+      const o = off.getContext('2d');
+      o.imageSmoothingQuality = 'high';
+      o.scale(DPR, DPR);
+      o.translate(OFF_PAD - c * CW, OFF_PAD - r * CH);
+      o.drawImage(srcCanvas, 0, 0);
+      o.globalCompositeOperation = 'destination-in';
+      o.fillStyle = '#000';
+      o.fill(p);
+      o.globalCompositeOperation = 'source-atop';
+      o.lineWidth = 1.5;
+      o.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      o.stroke(p);
+
+      pieces.push({ off, ox: c * CW - OFF_PAD, oy: r * CH - OFF_PAD });
+    }
+  }
+  renderSynthetic(parseFloat(document.getElementById('spread').value));
+}
+
+function renderSynthetic(spread = 0) {
+  canvas.width  = CANVAS_W * DPR;
+  canvas.height = CANVAS_H * DPR;
+  canvas.style.width  = CANVAS_W + 'px';
+  canvas.style.height = CANVAS_H + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  ctx.translate(PAD, PAD);
+
+  if (spread > 0) {
+    ctx.shadowColor = 'rgba(0,0,0,0.45)';
+    ctx.shadowBlur = Math.min(20, spread * 0.3 + 2);
+    ctx.shadowOffsetX = spread * 0.05;
+    ctx.shadowOffsetY = spread * 0.1;
+  } else {
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+  }
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const pc = pieces[r * COLS + c];
+      const cx = (c + 0.5) * CW, cy = (r + 0.5) * CH;
+      const dx = (cx - W / 2) / (W / 2) * spread;
+      const dy = (cy - H / 2) / (H / 2) * spread;
+      ctx.drawImage(pc.off, pc.ox + dx, pc.oy + dy, PW, PH);
+    }
+  }
+  ctx.shadowColor = 'transparent';
+}
+
+function svgOfSynthetic(spread) {
+  const base64Img = srcCanvas.toDataURL('image/jpeg', 0.9);
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}" width="${CANVAS_W}" height="${CANVAS_H}">\n`;
+  svg += `  <defs>\n`;
+  for (let i = 0; i < currentPathsD.length; i++)
+    svg += `    <clipPath id="clip-${i}" clipPathUnits="userSpaceOnUse"><path d="${currentPathsD[i]}" /></clipPath>\n`;
+  svg += `  </defs>\n`;
+  svg += `  <g transform="translate(${PAD}, ${PAD})">\n`;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c;
+      const cx = (c + 0.5) * CW, cy = (r + 0.5) * CH;
+      const dx = (cx - W / 2) / (W / 2) * spread;
+      const dy = (cy - H / 2) / (H / 2) * spread;
+      svg += `    <g transform="translate(${dx}, ${dy})">\n`;
+      svg += `      <image href="${base64Img}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" clip-path="url(#clip-${i})" />\n`;
+      svg += `      <path d="${currentPathsD[i]}" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5" />\n`;
+      svg += `    </g>\n`;
+    }
+  }
+  svg += `  </g>\n</svg>`;
+  return svg;
+}
+
+
+/* ============================================================
+   2. 实拍抠组件核心（纯前端，无依赖）
+      色差掩膜 → 形态学去噪 → 连通域 → 等值线多边形 → RDP 简化
+   ============================================================ */
+function borderMedian(data, w, h) {
+  const b = Math.max(4, Math.floor(Math.min(w, h) / 40));
+  const ch = [[], [], []];
+  const stepX = Math.max(1, Math.floor(w / 400));
+  const stepY = Math.max(1, Math.floor(h / 400));
+  for (let y = 0; y < h; y += stepY) {
+    for (const x of [0, 1, 2, w - 3, w - 2, w - 1]) {
+      if (x < 0 || x >= w) continue;
+      const p = (y * w + x) * 4;
+      ch[0].push(data[p]); ch[1].push(data[p+1]); ch[2].push(data[p+2]);
+    }
+  }
+  for (let x = 0; x < w; x += stepX) {
+    for (const y of [0, 1, 2, h - 3, h - 2, h - 1]) {
+      if (y < 0 || y >= h) continue;
+      const p = (y * w + x) * 4;
+      ch[0].push(data[p]); ch[1].push(data[p+1]); ch[2].push(data[p+2]);
+    }
+  }
+  const med = arr => { arr.sort((a,b)=>a-b); return arr[arr.length >> 1] | 0; };
+  return [med(ch[0]), med(ch[1]), med(ch[2])];
+}
+
+function buildMask(data, w, h, deltaE) {
+  const bg = borderMedian(data, w, h);
+  const bgl = rgb2lab(bg[0], bg[1], bg[2]);
+  const mask = new Uint8Array(w * h);
+  const de2 = deltaE * deltaE;
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    const rl = LIN[data[p]], gl = LIN[data[p+1]], bl = LIN[data[p+2]];
+    const X = (0.4124564*rl + 0.3575761*gl + 0.1804375*bl) / 0.95047;
+    const Y = (0.2126729*rl + 0.7151522*gl + 0.0721750*bl);
+    const Z = (0.0193339*rl + 0.1191920*gl + 0.9503041*bl) / 1.08883;
+    const fy = _f(Y);
+    const L = 116*fy - 16, A = 500*(_f(X) - fy), B = 200*(fy - _f(Z));
+    const dL = L - bgl[0], dA = A - bgl[1], dB = B - bgl[2];
+    mask[i] = (dL*dL + dA*dA + dB*dB) > de2 ? 1 : 0;
+  }
+  return { mask, bg };
+}
+
+// 3x3 膨胀 / 腐蚀
+function dilate3(m, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!m[y*w+x]) continue;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy; if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx; if (xx < 0 || xx >= w) continue;
+          out[yy*w+xx] = 1;
+        }
+      }
+    }
+  }
+  return out;
+}
+function erode3(m, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let all = 1;
+      for (let dy = -1; dy <= 1 && all; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) { all = 0; break; }
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) { all = 0; break; }
+          if (!m[yy*w+xx]) { all = 0; break; }
+        }
+      }
+      out[y*w+x] = all;
+    }
+  }
+  return out;
+}
+
+// 8 连通标记，返回 [{label, area, x0,y0,x1,y1}]
+function labelComponents(m, w, h, minArea) {
+  const labels = new Int32Array(w * h);
+  const comps = [];
+  const stack = new Int32Array(w * h);
+  let next = 1;
+  for (let i = 0; i < w * h; i++) {
+    if (!m[i] || labels[i]) continue;
+    const lbl = next++;
+    let sp = 0, area = 0;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    stack[sp++] = i; labels[i] = lbl;
+    while (sp) {
+      const p = stack[--sp];
+      const px = p % w, py = (p - px) / w;
+      area++;
+      if (px < x0) x0 = px; if (px > x1) x1 = px;
+      if (py < y0) y0 = py; if (py > y1) y1 = py;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = py + dy; if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const xx = px + dx; if (xx < 0 || xx >= w) continue;
+          const q = yy * w + xx;
+          if (m[q] && !labels[q]) { labels[q] = lbl; stack[sp++] = q; }
+        }
+      }
+    }
+    if (area >= minArea) comps.push({ label: lbl, area, x0, y0, x1, y1 });
+  }
+  return { labels, comps };
+}
+
+// 等值线（marching squares）求单个连通块的外轮廓 → 有序点列
+function contourOf(label, labels, w, h, bb) {
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : (labels[y*w+x] === label ? 1 : 0);
+  const segs = []; // each: [ax,ay,bx,by]
+  const seg = (ax, ay, bx, by) => segs.push([ax, ay, bx, by]);
+  // 在包围盒外扩 1 的范围内扫 2x2 单元
+  const x0 = bb.x0 - 1, y0 = bb.y0 - 1, x1 = bb.x1 + 1, y1 = bb.y1 + 1;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const tl = at(x, y), tr = at(x+1, y), br = at(x+1, y+1), bl = at(x, y+1);
+      const idx = tl | (tr << 1) | (br << 2) | (bl << 3);
+      if (idx === 0 || idx === 15) continue;
+      const top    = [x + 0.5, y];
+      const right  = [x + 1, y + 0.5];
+      const bottom = [x + 0.5, y + 1];
+      const left   = [x, y + 0.5];
+      switch (idx) {
+        case 1:  seg(left[0],left[1],top[0],top[1]); break;
+        case 2:  seg(top[0],top[1],right[0],right[1]); break;
+        case 3:  seg(left[0],left[1],right[0],right[1]); break;
+        case 4:  seg(right[0],right[1],bottom[0],bottom[1]); break;
+        case 5:  seg(left[0],left[1],top[0],top[1]); seg(right[0],right[1],bottom[0],bottom[1]); break;
+        case 6:  seg(top[0],top[1],bottom[0],bottom[1]); break;
+        case 7:  seg(left[0],left[1],bottom[0],bottom[1]); break;
+        case 8:  seg(bottom[0],bottom[1],left[0],left[1]); break;
+        case 9:  seg(top[0],top[1],bottom[0],bottom[1]); break;
+        case 10: seg(top[0],top[1],right[0],right[1]); seg(bottom[0],bottom[1],left[0],left[1]); break;
+        case 11: seg(right[0],right[1],bottom[0],bottom[1]); break;
+        case 12: seg(left[0],left[1],right[0],right[1]); break;
+        case 13: seg(top[0],top[1],right[0],right[1]); break;
+        case 14: seg(left[0],left[1],top[0],top[1]); break;
+        default: break;
+      }
+    }
+  }
+  if (!segs.length) return null;
+
+  // 端点用 key 串联成闭环
+  const key = (x, y) => Math.round(x * 2) + ',' + Math.round(y * 2);
+  const adj = new Map(); // key -> [ {other, si} ]
+  for (let si = 0; si < segs.length; si++) {
+    const [ax, ay, bx, by] = segs[si];
+    const ka = key(ax, ay), kb = key(bx, by);
+    if (!adj.has(ka)) adj.set(ka, []);
+    if (!adj.has(kb)) adj.set(kb, []);
+    adj.get(ka).push({ other: kb, si });
+    adj.get(kb).push({ other: ka, si });
+  }
+
+  // 追踪最长闭环
+  const usedSeg = new Uint8Array(segs.length);
+  let best = [];
+  const coordOf = k => k.split(',').map(v => parseInt(v, 10) / 2);
+  for (let start = 0; start < segs.length; start++) {
+    if (usedSeg[start]) continue;
+    const [sax, say, sbx, sby] = segs[start];
+    const startKey = key(sax, say);
+    const ring = [];
+    let curKey = startKey, prevKey = null, segIdx = start, guard = 0;
+    while (guard++ < segs.length * 3) {
+      if (usedSeg[segIdx]) break;
+      usedSeg[segIdx] = 1;
+      ring.push(coordOf(curKey));
+      const nb = adj.get(curKey) || [];
+      let nextKey = null, nextSeg = -1;
+      for (const e of nb) {
+        if (e.si === segIdx) continue;
+        if (e.other === prevKey) continue;
+        nextKey = e.other; nextSeg = e.si; break;
+      }
+      if (nextKey === null) {
+        // 退化：尝试任意未用相邻段
+        for (const e of nb) { if (e.si !== segIdx && !usedSeg[e.si]) { nextKey = e.other; nextSeg = e.si; break; } }
+      }
+      if (nextKey === null) break;
+      prevKey = curKey; curKey = nextKey; segIdx = nextSeg;
+      if (curKey === startKey) { ring.push(coordOf(curKey)); break; }
+    }
+    if (ring.length > best.length) best = ring;
+  }
+  if (best.length < 3) return null;
+  // 去掉闭环重复的收尾点
+  if (best.length > 1) {
+    const a = best[0], b = best[best.length - 1];
+    if (Math.abs(a[0]-b[0]) < 1e-6 && Math.abs(a[1]-b[1]) < 1e-6) best.pop();
+  }
+  return best;
+}
+
+// 对一张已加载的图片做完整抠组件
+function segmentImage(img, opts) {
+  const deltaE = opts.deltaE;
+  const minAreaPct = opts.minAreaPct; // 0~1
+  // 处理分辨率：长边压到 <= PROC_MAX
+  const PROC_MAX = opts.procMax || 900;
+  const nw = img.naturalWidth || img.width, nh = img.naturalHeight || img.height;
+  const scale = Math.min(1, PROC_MAX / Math.max(nw, nh));
+  const pw = Math.max(1, Math.round(nw * scale)), ph = Math.max(1, Math.round(nh * scale));
+
+  const pc = document.createElement('canvas');
+  pc.width = pw; pc.height = ph;
+  const pctx = pc.getContext('2d', { willReadFrequently: true });
+  pctx.drawImage(img, 0, 0, pw, ph);
+  const imgData = pctx.getImageData(0, 0, pw, ph);
+  const data = imgData.data;
+
+  const { mask: rawMask, bg } = buildMask(data, pw, ph, deltaE);
+  // 开运算去毛刺 → 闭运算补洞
+  let mask = erode3(rawMask, pw, ph);
+  mask = dilate3(mask, pw, ph);
+  mask = dilate3(mask, pw, ph);
+  mask = erode3(mask, pw, ph);
+
+  const minArea = Math.max(200, Math.round(minAreaPct * pw * ph));
+  const { labels, comps } = labelComponents(mask, pw, ph, minArea);
+
+  const polys = [];
+  for (const bb of comps) {
+    const ring = contourOf(bb.label, labels, pw, ph, bb);
+    if (!ring) continue;
+    // RDP 简化：eps 随尺寸自适应（先粗简化，再丢近共线尖刺）
+    const diag = Math.hypot(bb.x1 - bb.x0, bb.y1 - bb.y0);
+    const eps = Math.max(1.6, 0.010 * diag);
+    let poly = rdp(ring, eps);
+    if (poly.length < 3) poly = ring;
+    poly = dropCollinear(poly, 0.012 * diag, 9.0);
+    const area = polygonArea(poly);
+    const pixArea = bb.area;
+    // 简化后面积必须贴近像素面积，否则退回更细的轮廓（保证抠图不缩水/不鼓包）
+    if (pixArea > 0 && Math.abs(area - pixArea) / pixArea > 0.04) {
+      poly = rdp(ring, eps * 0.45);
+      if (poly.length < 3) poly = ring;
+      poly = dropCollinear(poly, 0.006 * diag, 7.0);
+    }
+    // 质心
+    let cx = 0, cy = 0;
+    for (const p of poly) { cx += p[0]; cy += p[1]; }
+    cx /= poly.length; cy /= poly.length;
+    polys.push({ poly, area: polygonArea(poly), pixArea, cx, cy });
+  }
+
+  // 编号：从上到下、从左到右
+  polys.sort((a, b) => (Math.round(a.cy / 60) - Math.round(b.cy / 60)) || (a.cx - b.cx));
+  polys.forEach((p, i) => { p.id = i + 1; });
+
+  return { width: nw, height: nh, pw, ph, scale, bg, polys, bgLab: rgb2lab(bg[0], bg[1], bg[2]) };
+}
+
+// 多边形 → SVG path d（可带缩放/平移）
+function polyToD(poly, sx = 1, sy = 1, tx = 0, ty = 0) {
+  let d = '';
+  for (let i = 0; i < poly.length; i++) {
+    const x = poly[i][0] * sx + tx, y = poly[i][1] * sy + ty;
+    d += (i ? 'L ' : 'M ') + (Math.round(x * 100) / 100) + ' ' + (Math.round(y * 100) / 100) + ' ';
+  }
+  return d + 'Z';
+}
+
+// 实拍 → 整图 SVG（每块用真实轮廓裁剪图像纹理）
+function svgOfReal(seg, texDataURL, texW, texH, sxTex, syTex, spread) {
+  const polys = spreadPieces(seg, spread);
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${texW} ${texH}" width="${texW}" height="${texH}">\n`;
+  svg += `  <defs>\n`;
+  polys.forEach((p, i) => {
+    svg += `    <clipPath id="rclip-${i}" clipPathUnits="userSpaceOnUse"><path d="${polyToD(p.poly, sxTex, syTex, p.dx, p.dy)}" /></clipPath>\n`;
+  });
+  svg += `  </defs>\n`;
+  svg += `  <rect width="${texW}" height="${texH}" fill="#0f0f13" />\n`;
+  polys.forEach((p, i) => {
+    svg += `  <g>\n`;
+    svg += `    <image href="${texDataURL}" x="${p.dx}" y="${p.dy}" width="${texW}" height="${texH}" preserveAspectRatio="none" clip-path="url(#rclip-${i})" />\n`;
+    svg += `    <path d="${polyToD(p.poly, sxTex, syTex, p.dx, p.dy)}" fill="none" stroke="rgba(94,231,196,0.85)" stroke-width="1.5" />\n`;
+    svg += `  </g>\n`;
+  });
+  svg += `</svg>`;
+  return svg;
+}
+
+// 计算分离位移（spread 用）
+function spreadPieces(seg, spread) {
+  const cxAll = seg.width / 2, cyAll = seg.height / 2;
+  const rad = Math.hypot(seg.width, seg.height) / 2;
+  return seg.polys.map(p => {
+    const x = p.cx / seg.scale, y = p.cy / seg.scale;
+    const dx = spread > 0 ? (x - cxAll) / rad * spread : 0;
+    const dy = spread > 0 ? (y - cyAll) / rad * spread : 0;
+    return { poly: p.poly, cx: p.cx, cy: p.cy, dx, dy, id: p.id };
+  });
+}
+
+function svgOfRealPiece(p, seg, texDataURL, texW, texH, sxTex, syTex) {
+  const xs = p.poly.map(q => q[0] * sxTex), ys = p.poly.map(q => q[1] * syTex);
+  const minx = Math.min(...xs), miny = Math.min(...ys);
+  const maxx = Math.max(...xs), maxy = Math.max(...ys);
+  const w = Math.max(1, Math.ceil(maxx - minx)), h = Math.max(1, Math.ceil(maxy - miny));
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">\n`;
+  svg += `  <defs><clipPath id="cp" clipPathUnits="userSpaceOnUse"><path d="${polyToD(p.poly, sxTex, syTex, -minx, -miny)}" /></clipPath></defs>\n`;
+  svg += `  <image href="${texDataURL}" x="${-minx}" y="${-miny}" width="${texW}" height="${texH}" preserveAspectRatio="none" clip-path="url(#cp)" />\n`;
+  svg += `  <path d="${polyToD(p.poly, sxTex, syTex, -minx, -miny)}" fill="none" stroke="rgba(94,231,196,0.9)" stroke-width="1.5" />\n`;
+  svg += `</svg>`;
+  return svg;
+}
+
+
+/* ============================================================
+   3. 状态 & 渲染（实拍）
+   ============================================================ */
+let mode = 'synth';
+let curImage = null;
+let curSeg = null;
+let curTex = { url: null, w: 0, h: 0 };
+let lastSVG = null;
+
+function renderReal() {
+  if (!curSeg) return;
+  const seg = curSeg;
+  // 画布按图片长边适配，最长 1000
+  const maxSide = 1000;
+  const s = Math.min(1, maxSide / Math.max(seg.width, seg.height));
+  const cw = Math.round(seg.width * s), ch = Math.round(seg.height * s);
+  canvas.width = cw * DPR; canvas.height = ch * DPR;
+  canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.fillStyle = '#0f0f13'; ctx.fillRect(0, 0, cw, ch);
+
+  const spread = 0; // 实拍预览不做分离，只标注
+  const sxView = s, syView = s;
+  // 底图（半透，突出轮廓）
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+  ctx.drawImage(curImage, 0, 0, cw, ch);
+  ctx.restore();
+
+  const palette = ['#5ee7c4','#ff9a76','#6a8cff','#ffd36e','#ff6b9d','#7dd3fc','#c084fc','#f97316','#34d399','#f43f5e'];
+  seg.polys.forEach((p, i) => {
+    const col = palette[i % palette.length];
+    ctx.beginPath();
+    p.poly.forEach((q, k) => {
+      const x = q[0] * sxView, y = q[1] * syView;
+      if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    });
+    ctx.closePath();
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = col + '22'; ctx.fill();
+    const lx = p.cx * sxView, ly = p.cy * syView;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px system-ui';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('#' + p.id, lx, ly);
+  });
+}
+
+// 生成纹理（给 SVG 内嵌用）：长边 <= TEX_MAX
+function makeTexture(img) {
+  const TEX_MAX = 1600;
+  const nw = img.naturalWidth || img.width, nh = img.naturalHeight || img.height;
+  const s = Math.min(1, TEX_MAX / Math.max(nw, nh));
+  const tw = Math.max(1, Math.round(nw * s)), th = Math.max(1, Math.round(nh * s));
+  const tc = document.createElement('canvas');
+  tc.width = tw; tc.height = th;
+  tc.getContext('2d').drawImage(img, 0, 0, tw, th);
+  return { url: tc.toDataURL('image/jpeg', 0.92), w: tw, h: th };
+}
+
+
+/* ============================================================
+   4. 下载
+   ============================================================ */
+function triggerDownload(text, name, mime) {
+  const blob = new Blob([text], { type: mime || 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = name;
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function downloadSVG() {
+  if (mode === 'synth') {
+    const spread = parseFloat(document.getElementById('spread').value);
+    triggerDownload(svgOfSynthetic(spread), `puzzle-${Date.now()}.svg`);
+  } else {
+    if (!curSeg) { alert('请先选择一张实拍图片'); return; }
+    const spread = parseFloat(document.getElementById('spread').value) || 0;
+    const svg = svgOfReal(curSeg, curTex.url, curTex.w, curTex.h,
+                          curTex.w / curSeg.pw, curTex.h / curSeg.ph, spread);
+    triggerDownload(svg, `photo-puzzle-${Date.now()}.svg`);
+  }
+}
+
+function downloadPiecesSVG() {
+  if (!curSeg) { alert('请先选择一张实拍图片'); return; }
+  const sxTex = curTex.w / curSeg.pw, syTex = curTex.h / curSeg.ph;
+  const onlyFirst = curSeg.polys.slice(0, 1);
+  // 逐块下载（浏览器可能提示允许多文件下载）
+  curSeg.polys.forEach((p, i) => {
+    const svg = svgOfRealPiece(p, curSeg, curTex.url, curTex.w, curTex.h, sxTex, syTex);
+    setTimeout(() => triggerDownload(svg, `piece-${p.id}.svg`), i * 250);
+  });
+}
+
+
+/* ============================================================
+   5. UI 交互
+   ============================================================ */
+let zoom = 1.0;
+const zoomVal = document.getElementById('zoom-val');
+function updateZoom(val) {
+  zoom = Math.max(0.3, Math.min(3, val));
+  canvas.style.transform = `scale(${zoom})`;
+  zoomVal.textContent = Math.round(zoom * 100) + '%';
+}
+document.getElementById('zoom-in').onclick = () => updateZoom(zoom + 0.2);
+document.getElementById('zoom-out').onclick = () => updateZoom(zoom - 0.2);
+window.addEventListener('wheel', (e) => {
+  if (e.ctrlKey || e.metaKey) { e.preventDefault(); updateZoom(zoom - Math.sign(e.deltaY) * 0.1); }
+}, { passive: false });
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-synth').classList.toggle('active', m === 'synth');
+  document.getElementById('mode-real').classList.toggle('active', m === 'real');
+  document.getElementById('synth-ctrl').classList.toggle('hidden', m !== 'synth');
+  document.getElementById('real-ctrl').classList.toggle('hidden', m !== 'real');
+  document.getElementById('download-pieces-btn').classList.toggle('hidden', m !== 'real');
+  if (m === 'synth') { buildPuzzle(document.getElementById('edge-select').value); }
+  else if (curSeg) { renderReal(); }
+}
+document.getElementById('mode-synth').onclick = () => setMode('synth');
+document.getElementById('mode-real').onclick = () => setMode('real');
+
+document.getElementById('edge-select').addEventListener('change', e => {
+  if (mode === 'synth') buildPuzzle(e.target.value);
+});
+document.getElementById('spread').addEventListener('input', e => {
+  if (mode === 'synth') renderSynthetic(+e.target.value);
+});
+
+const deltaeEl = document.getElementById('deltae');
+const deltaeVal = document.getElementById('deltae-val');
+deltaeEl.addEventListener('input', () => { deltaeVal.textContent = deltaeEl.value; if (curImage) resegment(); });
+const minareaEl = document.getElementById('minarea');
+const minareaVal = document.getElementById('minarea-val');
+minareaEl.addEventListener('input', () => {
+  minareaVal.textContent = (parseFloat(minareaEl.value) / 100).toFixed(1) + '%';
+  if (curImage) resegment();
+});
+
+function resegment() {
+  if (!curImage) return;
+  curSeg = segmentImage(curImage, {
+    deltaE: +deltaeEl.value,
+    minAreaPct: +minareaEl.value / 100,
+  });
+  renderReal();
+}
+
+function loadImageInto(img) {
+  curImage = img;
+  curTex = makeTexture(img);
+  resegment();
+}
+
+document.getElementById('file').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => { setMode('real'); loadImageInto(img); };
+  img.onerror = () => alert('图片加载失败');
+  img.src = URL.createObjectURL(f);
+});
+
+document.getElementById('download-png-btn').onclick = () => {
+  const dataURL = canvas.toDataURL('image/png');
+  triggerDownload(dataURL, `puzzle-${Date.now()}.png`, 'image/png');
+};
+document.getElementById('download-svg-btn').onclick = downloadSVG;
+document.getElementById('download-pieces-btn').onclick = downloadPiecesSVG;
+
+
+/* ============================================================
+   6. 自动化自测（?selftest=synthetic | real&img=<url>）
+   ============================================================ */
+function xmlOK(svgText) {
+  try {
+    const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+    const err = doc.getElementsByTagName('parsererror');
+    if (err && err.length) return { ok: false, err: err[0].textContent.slice(0, 200) };
+    return { ok: true };
+  } catch (e) { return { ok: false, err: String(e) }; }
+}
+
+async function runSelftest() {
+  const params = new URLSearchParams(location.search);
+  const kind = params.get('selftest');
+  if (!kind) return;
+  const reportEl = document.getElementById('report');
+  reportEl.style.display = 'block';
+  const out = { selftest: kind, ok: true, details: {} };
+  try {
+    if (kind === 'synthetic') {
+      buildPuzzle('mixed');
+      const svg = svgOfSynthetic(40);
+      const v = xmlOK(svg);
+      out.details.svgValid = v.ok; if (!v.ok) out.details.err = v.err;
+      out.details.clipPaths = (svg.match(/<clipPath/g) || []).length;
+      out.details.images = (svg.match(/<image/g) || []).length;
+      out.details.expectedPieces = COLS * ROWS;
+      out.details.pathsD = currentPathsD.length;
+      out.ok = v.ok && out.details.clipPaths === COLS * ROWS && out.details.pathsD === COLS * ROWS;
+      // 用 path d 粗校验：每个 d 至少一个 M
+      const badD = currentPathsD.filter(d => !/^\s*M /.test(d)).length;
+      out.details.badD = badD; if (badD) out.ok = false;
+    } else if (kind === 'real') {
+      const src = params.get('img');
+      if (!src) { out.ok = false; out.details.err = 'no &img='; }
+      else {
+        const img = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = () => rej(new Error('image load error: ' + src));
+          im.crossOrigin = 'anonymous';
+          im.src = src;
+        }).catch(e => { out.ok = false; out.details.err = String(e.message || e); return null; });
+        if (img) {
+          const seg = segmentImage(img, {
+            deltaE: +(params.get('deltaE') || 40),
+            minAreaPct: +(params.get('minArea') || 0.002),
+          });
+          out.details.width = seg.width; out.details.height = seg.height;
+          out.details.procSize = [seg.pw, seg.ph];
+          out.details.bg = seg.bg;
+          out.details.pieceCount = seg.polys.length;
+          out.details.pieces = seg.polys.map(p => ({
+            id: p.id, verts: p.poly.length,
+            area: Math.round(p.area), pixArea: p.pixArea,
+            areaErrPct: p.pixArea ? +(Math.abs(p.area - p.pixArea) / p.pixArea * 100).toFixed(1) : null,
+          }));
+          // 生成 SVG 并校验（用当前 tile 尺寸做纹理，避免大图）
+          try {
+            curImage = img; curTex = makeTexture(img); curSeg = seg;
+            const svg = svgOfReal(seg, curTex.url, curTex.w, curTex.h,
+                                  curTex.w / seg.pw, curTex.h / seg.ph, 30);
+            const v = xmlOK(svg);
+            out.details.svgValid = v.ok; if (!v.ok) out.details.err = v.err || out.details.err;
+            if (params.get('render')) {
+              const host = document.createElement('div');
+              host.id = 'svg-host';
+              host.style.cssText = 'position:fixed;inset:0;background:#0f0f13;display:flex;align-items:center;justify-content:center;z-index:5';
+              host.innerHTML = svg;
+              const s0 = host.querySelector('svg');
+              if (s0) { s0.style.maxWidth = '100vw'; s0.style.maxHeight = '100vh'; s0.style.width = 'auto'; s0.style.height = 'auto'; }
+              document.body.appendChild(host);
+            }
+            out.details.svgClipPaths = (svg.match(/<clipPath/g) || []).length;
+            out.details.svgBytes = svg.length;
+            // 逐块 SVG 也要合法
+            const sx = curTex.w / seg.pw, sy = curTex.h / seg.ph;
+            let pieceBad = 0;
+            for (const p of seg.polys) {
+              const one = xmlOK(svgOfRealPiece(p, seg, curTex.url, curTex.w, curTex.h, sx, sy));
+              if (!one.ok) pieceBad++;
+            }
+            out.details.pieceSVGbad = pieceBad;
+            out.ok = v.ok && pieceBad === 0 && seg.polys.length > 0 &&
+                     out.details.svgClipPaths === seg.polys.length;
+          } catch (e) {
+            out.ok = false; out.details.renderErr = String(e.message || e);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    out.ok = false; out.details.fatal = String(e.stack || e);
+  }
+  reportEl.textContent = 'SELFTEST_RESULT ' + JSON.stringify(out) + ' END_SELFTEST';
+  window.__selftestDone = true;
+}
+
+// 初始化
+buildPuzzle('mixed');
+runSelftest();
+</script>
+</body>
+</html>
