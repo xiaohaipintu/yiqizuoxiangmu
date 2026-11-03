@@ -99,11 +99,6 @@ def transform(poly, R, t):
     return np.asarray(poly, float) @ R.T + t
 
 
-def _bbox(p):
-    p = np.asarray(p, float)
-    return (float(p[:, 0].min()), float(p[:, 1].min()), float(p[:, 0].max()), float(p[:, 1].max()))
-
-
 def rot(theta):
     c, s = np.cos(theta), np.sin(theta)
     return np.array([[c, -s], [s, c]])
@@ -182,7 +177,7 @@ def _rigid_fit(q0, q1, P0, P1):
     return R, t
 
 
-def solve(polys, len_tol=1e-6, gap_tol=0.2):
+def solve(polys, len_tol=1e-6):
     n = len(polys)
     # 统一成 CCW，避免绕向不一致时“反向贴边”贴错面
     polys = [p if _signed_area(p) > 0 else p[::-1] for p in polys]
@@ -213,77 +208,40 @@ def solve(polys, len_tol=1e-6, gap_tol=0.2):
         res.sort(key=lambda ej: abs(all_edges[ej][2] - L))
         return res
 
-    # BFS 逐片长出（候选表预建 + bbox 预筛，噪声下也快）
-    eoff = [0] * (n + 1)
-    for e in all_edges:
-        eoff[e[0] + 1] += 1
-    for i in range(n):
-        eoff[i + 1] += eoff[i]
-    E = len(all_edges)
-    Ls = np.array([e[2] for e in all_edges])
-    sorder = np.argsort(Ls); sortedL = Ls[sorder]
-    cands = []
-    for i in range(E):
-        L = Ls[i]; pid = all_edges[i][0]
-        lo = np.searchsorted(sortedL, L - len_tol, 'left')
-        hi = np.searchsorted(sortedL, L + len_tol, 'right')
-        lst = [(abs(Ls[sorder[t]] - L), sorder[t]) for t in range(lo, hi)
-               if sorder[t] != i and all_edges[sorder[t]][0] != pid]
-        lst.sort()
-        cands.append([j for _, j in lst])
-
+    # BFS 逐片长出
     pose = [None] * n
     pose[0] = (np.eye(2), np.zeros(2))
     placed_polys = {0: polys[0].copy()}
-    # 空间网格：只和邻近的已放片做重叠检查（噪声下候选很多时是关键提速）
-    bbs = [_bbox(p) for p in polys]
-    cell = max(40.0, float(np.median([max(b[2]-b[0], b[3]-b[1]) for b in bbs]) or 60.0))
-    grid = {}
-
-    def ginsert(pid, bb):
-        for gx in range(int(bb[0] // cell), int(bb[2] // cell) + 1):
-            for gy in range(int(bb[1] // cell), int(bb[3] // cell) + 1):
-                grid.setdefault((gx, gy), []).append(pid)
-
-    def gnear(bb):
-        res = set()
-        for gx in range(int((bb[0] - gap_tol) // cell), int((bb[2] + gap_tol) // cell) + 1):
-            for gy in range(int((bb[1] - gap_tol) // cell), int((bb[3] + gap_tol) // cell) + 1):
-                s = grid.get((gx, gy))
-                if s:
-                    res.update(s)
-        return res
-
-    ginsert(0, bbs[0])
     from collections import deque
     q = deque([0])
+    conflicts = 0
     while q:
         A = q.popleft()
-        polyA = placed_polys[A]; degA = len(polyA)
+        RA, tA = pose[A]
+        polyA = placed_polys[A]
+        # A 的每条边
+        degA = len(polys[A])
         for ka in range(degA):
-            ei = eoff[A] + ka
             ea0 = polyA[ka]; ea1 = polyA[(ka + 1) % degA]
-            for ej in cands[ei]:
-                B = all_edges[ej][0]
-                if pose[B] is not None:
-                    continue
-                qb0 = all_edges[ej][3]; qb1 = all_edges[ej][4]
+            # 在原始边表里找 A 的这条边（用变换前的长度定位）——直接用长度匹配候选即可
+            La = float(np.linalg.norm(ea1 - ea0))
+            # 候选：其它未放片里、某条边长度≈La 的
+            for ej in range(len(all_edges)):
+                B, kb, Lb, qb0, qb1 = all_edges[ej]
+                if B == A or pose[B] is not None: continue
+                if abs(Lb - La) > len_tol: continue
+                # 贴边：两种端点对应都试，取“与已放片不重叠”的那种（绕向鲁棒）
                 got = None
                 for P0, P1 in ((ea1, ea0), (ea0, ea1)):
                     Rb, tb = _rigid_fit(qb0, qb1, P0, P1)
                     pB = transform(polys[B], Rb, tb)
-                    bb = _bbox(pB)
-                    clash = False
-                    for C in gnear(bb):
-                        if convex_overlap(pB, placed_polys[C], -gap_tol):
-                            clash = True; break
-                    if clash:
+                    if any(convex_overlap(pB, P2, -0.2) for P2 in placed_polys.values()):  # -0.2 容忍共享边浮点
                         continue
-                    got = (Rb, tb, pB, bb); break
+                    got = (Rb, tb, pB); break
                 if got is None:
                     continue
-                Rb, tb, pB, bb = got
-                pose[B] = (Rb, tb); placed_polys[B] = pB; ginsert(B, bb); q.append(B)
+                Rb, tb, pB = got
+                pose[B] = (Rb, tb); placed_polys[B] = pB; q.append(B)
                 break
     placed = sum(1 for p in pose if p is not None)
     return pose, placed, placed_polys
@@ -291,29 +249,18 @@ def solve(polys, len_tol=1e-6, gap_tol=0.2):
 
 # ---------------------------------------------------------------- 校验 & 渲染
 def evaluate(placed_polys, S):
-    if not (_HAS_SHAPELY and len(placed_polys) > 1):
-        return {}
-    try:
-        polys = []
-        for v in placed_polys.values():
-            if len(v) < 3:
-                continue
-            g = SPoly(v)
-            if not g.is_valid:
-                g = g.buffer(0)
-            if g.is_empty or g.area <= 0:
-                continue
-            polys.append(g)
+    if _HAS_SHAPELY and len(placed_polys) > 1:
+        polys = [SPoly(v) for v in placed_polys.values() if len(v) >= 3]
         total = sum(p.area for p in polys)
         u = unary_union(polys)
         overlap = total - u.area
+        # 外接面积 vs 并集面积 → 空洞/外溢近似：用凸包面积减并集
         hull = u.convex_hull.area
         return {"union_area": float(u.area), "sum_area": float(total),
                 "overlap_area": float(max(0.0, overlap)),
                 "overlap_pct": float(max(0.0, overlap) / max(total, 1e-9) * 100),
                 "hull_frac": float(u.area / max(hull, 1e-9))}
-    except Exception as e:
-        return {"error": str(e)[:120]}
+    return {}
 
 
 def render_assembled(scat, scat_side, polys, pose, out_side):
@@ -374,8 +321,6 @@ def main():
     ap.add_argument("--image", default="拼图还原项目/svg_tool/test_out/letter_h5.png")
     ap.add_argument("--out", default="拼图还原项目/svg_tool/test_out/poly_solve")
     ap.add_argument("--len-tol", type=float, default=1e-6)
-    ap.add_argument("--gap-tol", type=float, default=0.2)
-    ap.add_argument("--noise", type=float, default=0.0, help="顶点噪声(px)，模拟分割误差")
     args = ap.parse_args()
 
     outdir = pathlib.Path(args.out); outdir.mkdir(parents=True, exist_ok=True)
@@ -392,10 +337,6 @@ def main():
     t0 = time.time()
     polys, poses = scatter(cells, scat_side, args.seed)
     t_scatter = time.time() - t0
-    # 难度：给每片顶点加噪声（模拟分割误差，共享边不再精确等长）
-    if args.noise > 0:
-        _rng = np.random.default_rng(args.seed + 5)
-        polys = [p + _rng.normal(0, args.noise, p.shape) for p in polys]
 
     # 渲染散落图（用纹理按散落位姿贴）
     scat = np.zeros((scat_side, scat_side, 3), np.uint8)
@@ -418,8 +359,7 @@ def main():
         scat = np.where(m3, warped, scat)
 
     t0 = time.time()
-    lt = max(args.len_tol, 6 * args.noise); gt = max(args.gap_tol, 3 * args.noise)
-    pose, placed, placed_polys = solve(polys, lt, gt)
+    pose, placed, placed_polys = solve(polys, args.len_tol)
     t_solve = time.time() - t0
 
     metrics = evaluate(placed_polys, S)
