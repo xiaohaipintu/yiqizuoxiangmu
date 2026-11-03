@@ -1101,10 +1101,12 @@ async function runSelftest() {
           im.src = src;
         }).catch(e => { out.ok = false; out.details.err = String(e.message || e); return null; });
         if (img) {
+          const _t0 = (performance && performance.now) ? performance.now() : Date.now();
           const seg = segmentImage(img, {
             deltaE: +(params.get('deltaE') || 40),
             minAreaPct: +(params.get('minArea') || 0.002),
           });
+          out.details.segMs = Math.round(((performance && performance.now) ? performance.now() : Date.now()) - _t0);
           out.details.width = seg.width; out.details.height = seg.height;
           out.details.procSize = [seg.pw, seg.ph];
           out.details.bg = seg.bg;
