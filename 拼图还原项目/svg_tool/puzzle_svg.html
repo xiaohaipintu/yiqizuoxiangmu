@@ -1118,17 +1118,22 @@ async function runSelftest() {
           try {
             curImage = img; curTex = makeTexture(img); curSeg = seg;
             const svg = svgOfReal(seg, curTex.url, curTex.w, curTex.h,
-                                  curTex.w / seg.pw, curTex.h / seg.ph, 30);
+                                  curTex.w / seg.pw, curTex.h / seg.ph, +(params.get('spread') ?? 30));
             const v = xmlOK(svg);
             out.details.svgValid = v.ok; if (!v.ok) out.details.err = v.err || out.details.err;
             if (params.get('render')) {
               const host = document.createElement('div');
               host.id = 'svg-host';
-              host.style.cssText = 'position:fixed;inset:0;background:#0f0f13;display:flex;align-items:center;justify-content:center;z-index:5';
+              host.style.cssText = 'position:fixed;inset:0;background:#0f0f13;display:flex;align-items:center;justify-content:center;z-index:9999';
               host.innerHTML = svg;
               const s0 = host.querySelector('svg');
-              if (s0) { s0.style.maxWidth = '100vw'; s0.style.maxHeight = '100vh'; s0.style.width = 'auto'; s0.style.height = 'auto'; }
+              if (s0) { s0.style.maxWidth = '100vw'; s0.style.maxHeight = '100vh'; s0.style.width = 'auto'; s0.style.height = 'auto'; s0.style.display = 'block'; }
               document.body.appendChild(host);
+              // 截图模式：隐藏 UI / 报告，只留结果图
+              const ui = document.querySelector('.ui'); if (ui) ui.style.display = 'none';
+              reportEl.style.display = 'none';
+              document.body.style.background = '#0f0f13';
+              document.body.style.overflow = 'hidden';
             }
             out.details.svgClipPaths = (svg.match(/<clipPath/g) || []).length;
             out.details.svgBytes = svg.length;

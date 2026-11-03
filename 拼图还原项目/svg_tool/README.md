@@ -99,6 +99,7 @@ python src/photo_to_svg.py --image 拼图软件测试/实验1测试图.jpg --out
 ```bash
 python svg_tool/tests/gen_hard_cases.py --out svg_tool/test_out/hard   # 造图 + 真值 json
 python svg_tool/tests/run_hard_cases.py --cases svg_tool/test_out/hard  # 逐张跑、对比、打印表
+python svg_tool/tests/make_montage.py   # 全部实验拼成一张「原图 | 抠图结果」对比大图 → test_out/hard_montage.png
 ```
 
 | case | 难度点 | 真值 | 结果 |
