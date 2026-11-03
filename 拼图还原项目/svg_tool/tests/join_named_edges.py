@@ -98,8 +98,12 @@ def main():
     print(f"采用: contact={contact}", flush=True)
 
     # 渲染拼合（原图像素）+ 高亮 A6 / B2+B3
+    # 稠密真实轮廓用于裁片 → 保留锯齿撕边（不用简化多边形的直边）
+    dense_fine = dense_contours(1.5)
+    dAf, dBf = dense_fine[0], dense_fine[1]
+
     def render(hl=True):
-        polys = [(A, np.eye(2), np.zeros(2), (255, 120, 40), "A"), (B, R, t, (60, 60, 255), "B")]
+        polys = [(dAf, np.eye(2), np.zeros(2), (255, 120, 40), "A"), (dBf, R, t, (60, 60, 255), "B")]
         allp = np.vstack([p @ RR.T + tt for p, RR, tt, _c, _n in polys])
         x0 = int(allp[:, 0].min()) - 6; y0 = int(allp[:, 1].min()) - 6
         W = int(allp[:, 0].max() - x0) + 12; H = int(allp[:, 1].max() - y0) + 12
@@ -130,8 +134,10 @@ def main():
 
     joined = render(True)
     wr(out / "two_joined_A6_B23.png", joined)
-    print("saved", out / "two_joined_A6_B23.png", joined.shape)
-    os.startfile(os.path.abspath(str(out / "two_joined_A6_B23.png")))
+    clean = render(False)
+    wr(out / "two_joined_clean.png", clean)
+    print("saved 标注版  two_joined_A6_B23.png ; 无标注版 two_joined_clean.png", clean.shape)
+    os.startfile(os.path.abspath(str(out / "two_joined_clean.png")))
 
 
 if __name__ == "__main__":
