@@ -48,7 +48,7 @@ def scatter_draw(tex, pieces, rng, bgcol):
             th = rng.uniform(0, 2 * np.pi)
             cx = rad + rng.uniform(0, SIDE - 2 * rad); cy = rad + rng.uniform(0, SIDE - 2 * rad)
             Rm = T.rot(th); pc = (poly - cen) @ Rm.T + [cx, cy]
-            h = Polygon(pc).convex_hull.buffer(6)
+            h = Polygon(pc).convex_hull.buffer(max(10, int(0.05 * SIDE)))
             b = h.bounds
             if b[0] < 0 or b[1] < 0 or b[2] > SIDE or b[3] > SIDE: continue
             if any(h.intersects(ph) for ph in placed): continue
@@ -71,17 +71,20 @@ def main():
     tiles = []
     nok = 0
     for c in range(N):
-        rng = np.random.default_rng(1000 + c)
-        pieces = two_pieces(S, rng)
         bgcol = PALETTE[c % len(PALETTE)]
-        inp = scatter_draw(tex, pieces, rng, bgcol)
-        # 真实拼接（subprocess 分割 + 拼合）
-        tmpd = pathlib.Path(tempfile.mkdtemp(prefix="sweep-"))
-        ip = tmpd / "in.jpg"; cv2.imencode(".jpg", inp)[1].tofile(str(ip))
-        try:
-            res = TJ.assemble(str(ip))
-        except Exception as e:
-            res = {"ok": False, "error": str(e)}
+        inp = None; res = {"ok": False, "pieces": "?"}
+        for attempt in range(6):          # 分割没出 2 片就换个摆法重试，确保每例都是 2 片
+            rng = np.random.default_rng(1000 + c * 13 + attempt * 97)
+            pieces = two_pieces(S, rng)
+            inp = scatter_draw(tex, pieces, rng, bgcol)
+            tmpd = pathlib.Path(tempfile.mkdtemp(prefix="sweep-"))
+            ip = tmpd / "in.jpg"; cv2.imencode(".jpg", inp)[1].tofile(str(ip))
+            try:
+                res = TJ.assemble(str(ip))
+            except Exception as e:
+                res = {"ok": False, "error": str(e)}
+            if res.get("ok"):
+                break
         joined = None; tag = ""
         if res.get("ok"):
             joined = cv2.imdecode(np.frombuffer(base64.b64decode(res["joined_png"]), np.uint8), cv2.IMREAD_COLOR)
