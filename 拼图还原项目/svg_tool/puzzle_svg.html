@@ -488,21 +488,102 @@ function borderMedian(data, w, h) {
   return [med(ch[0]), med(ch[1]), med(ch[2])];
 }
 
-function buildMask(data, w, h, deltaE) {
-  const bg = borderMedian(data, w, h);
-  const bgl = rgb2lab(bg[0], bg[1], bg[2]);
-  const mask = new Uint8Array(w * h);
-  const de2 = deltaE * deltaE;
-  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
-    const rl = LIN[data[p]], gl = LIN[data[p+1]], bl = LIN[data[p+2]];
-    const X = (0.4124564*rl + 0.3575761*gl + 0.1804375*bl) / 0.95047;
-    const Y = (0.2126729*rl + 0.7151522*gl + 0.0721750*bl);
-    const Z = (0.0193339*rl + 0.1191920*gl + 0.9503041*bl) / 1.08883;
-    const fy = _f(Y);
-    const L = 116*fy - 16, A = 500*(_f(X) - fy), B = 200*(fy - _f(Z));
-    const dL = L - bgl[0], dA = A - bgl[1], dB = B - bgl[2];
-    mask[i] = (dL*dL + dA*dA + dB*dB) > de2 ? 1 : 0;
+// 3x3 矩阵求逆（背景平面拟合用）
+function inv3(m) {
+  const [[a,b,c],[d,e,f],[g,h,i]] = m;
+  const A = e*i - f*h, B = -(d*i - f*g), C = d*h - e*g;
+  const det = a*A + b*B + c*C;
+  if (Math.abs(det) < 1e-9) return null;
+  const id = 1 / det;
+  return [
+    [A*id, -(b*i - c*h)*id, (b*f - c*e)*id],
+    [B*id, (a*i - c*g)*id, -(a*f - c*d)*id],
+    [C*id, -(a*h - b*g)*id, (a*e - b*d)*id],
+  ];
+}
+
+// 用画面四边的背景像素拟合一张「平面背景模型」bg(x,y)=a+b·x+c·y（每通道独立）。
+// 真实照片常有光照渐变 / 一侧偏亮，单一中位色会被带偏 → 平面模型把渐变吸收掉，
+// 这样背景残差更小，低对比碎片才能用更低的阈值抠出来而不误判背景。
+function fitBgPlane(data, w, h) {
+  const xs = [], ys = [], rs = [], gs = [], bs = [];
+  const stepX = Math.max(1, Math.floor(w / 300)), stepY = Math.max(1, Math.floor(h / 300));
+  const push = (x, y) => { const p = (y*w + x) * 4; xs.push(x/w); ys.push(y/h); rs.push(data[p]); gs.push(data[p+1]); bs.push(data[p+2]); };
+  for (let y = 0; y < h; y += stepY) for (const x of [0,1,2,w-3,w-2,w-1]) if (x >= 0 && x < w) push(x, y);
+  for (let x = 0; x < w; x += stepX) for (const y of [0,1,2,h-3,h-2,h-1]) if (y >= 0 && y < h) push(x, y);
+  const n = xs.length;
+  if (n < 8) return null;
+  let S1 = n, Sx = 0, Sy = 0, Sxx = 0, Sxy = 0, Syy = 0;
+  const Sv = [0,0,0], Svx = [0,0,0], Svy = [0,0,0];
+  for (let i = 0; i < n; i++) {
+    const x = xs[i], y = ys[i], r = rs[i], g = gs[i], b = bs[i];
+    Sx += x; Sy += y; Sxx += x*x; Sxy += x*y; Syy += y*y;
+    Sv[0]+=r; Sv[1]+=g; Sv[2]+=b;
+    Svx[0]+=r*x; Svx[1]+=g*x; Svx[2]+=b*x;
+    Svy[0]+=r*y; Svy[1]+=g*y; Svy[2]+=b*y;
   }
+  const inv = inv3([[S1,Sx,Sy],[Sx,Sxx,Sxy],[Sy,Sxy,Syy]]);
+  const rhs = [[Sv[0],Svx[0],Svy[0]],[Sv[1],Svx[1],Svy[1]],[Sv[2],Svx[2],Svy[2]]];
+  const coeff = [[0,0,0],[0,0,0],[0,0,0]];
+  for (let ch = 0; ch < 3; ch++) {
+    if (inv) for (let r = 0; r < 3; r++) {
+      let s = 0; for (let k = 0; k < 3; k++) s += inv[r][k] * rhs[ch][k];
+      coeff[ch][r] = s;
+    } else coeff[ch] = [rhs[ch][0] / n, 0, 0];
+    // 病态保护：斜率离谱 → 退回常数平面（中位色近似），避免噪声把背景拉歪
+    if (!isFinite(coeff[ch][0]) || Math.abs(coeff[ch][1]) > 1500 || Math.abs(coeff[ch][2]) > 1500)
+      coeff[ch] = [rhs[ch][0] / n, 0, 0];
+  }
+  return coeff;
+}
+
+function buildMask(data, w, h, deltaE) {
+  const de2 = deltaE * deltaE;
+  const mask = new Uint8Array(w * h);
+  const cl = v => v < 0 ? 0 : v > 255 ? 255 : v;
+  const coeff = fitBgPlane(data, w, h);
+
+  if (!coeff) { // 兜底：常数值（无法拟合平面时）
+    const bg = borderMedian(data, w, h);
+    const bgl = rgb2lab(bg[0], bg[1], bg[2]);
+    for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+      const rl = LIN[data[p]], gl = LIN[data[p+1]], bl = LIN[data[p+2]];
+      const X = (0.4124564*rl + 0.3575761*gl + 0.1804375*bl) / 0.95047;
+      const Y = (0.2126729*rl + 0.7151522*gl + 0.0721750*bl);
+      const Z = (0.0193339*rl + 0.1191920*gl + 0.9503041*bl) / 1.08883;
+      const fy = _f(Y);
+      const L = 116*fy - 16, A = 500*(_f(X) - fy), B = 200*(fy - _f(Z));
+      const dL = L - bgl[0], dA = A - bgl[1], dB = B - bgl[2];
+      mask[i] = (dL*dL + dA*dA + dB*dB) > de2 ? 1 : 0;
+    }
+    return { mask, bg };
+  }
+
+  const cR = coeff[0], cG = coeff[1], cB = coeff[2];
+  for (let y = 0; y < h; y++) {
+    const yn = y / h;
+    const aR = cR[0] + cR[2]*yn, aG = cG[0] + cG[2]*yn, aB = cB[0] + cB[2]*yn;
+    for (let x = 0; x < w; x++) {
+      const i = y*w + x, p = i * 4, xn = x / w;
+      // 该点背景色（平面模型）→ Lab
+      const brl = LIN[cl(aR + cR[1]*xn) | 0], bgl = LIN[cl(aG + cG[1]*xn) | 0], bbl = LIN[cl(aB + cB[1]*xn) | 0];
+      const bX = (0.4124564*brl + 0.3575761*bgl + 0.1804375*bbl) / 0.95047;
+      const bY = (0.2126729*brl + 0.7151522*bgl + 0.0721750*bbl);
+      const bZ = (0.0193339*brl + 0.1191920*bgl + 0.9503041*bbl) / 1.08883;
+      const bfy = _f(bY);
+      const bL = 116*bfy - 16, bA = 500*(_f(bX) - bfy), bB = 200*(bfy - _f(bZ));
+      // 该点像素 → Lab
+      const rl = LIN[data[p]], gl = LIN[data[p+1]], bl = LIN[data[p+2]];
+      const X = (0.4124564*rl + 0.3575761*gl + 0.1804375*bl) / 0.95047;
+      const Y = (0.2126729*rl + 0.7151522*gl + 0.0721750*bl);
+      const Z = (0.0193339*rl + 0.1191920*gl + 0.9503041*bl) / 1.08883;
+      const fy = _f(Y);
+      const L = 116*fy - 16, A = 500*(_f(X) - fy), B = 200*(fy - _f(Z));
+      const dL = L - bL, dA = A - bA, dB = B - bB;
+      mask[i] = (dL*dL + dA*dA + dB*dB) > de2 ? 1 : 0;
+    }
+  }
+  const bg = [cl(cR[0]) | 0, cl(cG[0]) | 0, cl(cB[0]) | 0];
   return { mask, bg };
 }
 

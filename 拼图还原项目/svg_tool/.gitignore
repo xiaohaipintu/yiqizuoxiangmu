@@ -1,4 +1,6 @@
 # 生成的验证产物与无头浏览器配置不进仓库
 test_out/
 .p*/
+.r*/
+.sweep/
 .edgeprof/
