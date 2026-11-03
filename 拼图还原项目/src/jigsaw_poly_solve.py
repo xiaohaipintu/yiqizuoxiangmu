@@ -216,6 +216,8 @@ def _tex_continuity(scat, a0, a1, cenA, poseA, poseB, d=4.0, K=20):
 
 
 def solve(polys, len_tol=1e-6, scat=None, shape_tol=6.0, tex_tol=75.0):
+    if scat is None:
+        raise ValueError("纹理检测不可关闭：solve() 必须传入散落图 scat")
     n = len(polys)
     # 统一成 CCW，避免绕向不一致时“反向贴边”贴错面
     polys = [p if _signed_area(p) > 0 else p[::-1] for p in polys]
