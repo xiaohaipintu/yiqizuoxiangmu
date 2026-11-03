@@ -237,6 +237,95 @@ def solve(polys, min_inl=10, K=500, eps=1.5, seed=0):
     return pose, placed_n, placed
 
 
+def solve_v2(polys, K=500, eps=1.5, min_run=8, seed=0):
+    """装配级 RANSAC + 多边互验：多个种子边各自拼一整盘，用“被多少条边互相印证 + 拼上多少片”选真解。"""
+    n = len(polys)
+    polys = [p if signed_area(p) > 0 else p[::-1] for p in polys]
+    # ===== 确定性“共享撕痕”匹配 =====
+    # 撕痕同一条折线 → 相邻两片沿撕痕的【边长序列精确相同、但反序】。
+    # 用“最长共同边长（反序）子串”直接锁定撕痕：真串几十条边，假串~0，互不混淆。
+    from collections import defaultdict
+
+    def elens(p):
+        m = len(p); return np.array([np.linalg.norm(p[(k + 1) % m] - p[k]) for k in range(m)])
+
+    la = [elens(p) for p in polys]
+    kv = []
+    for e in la:
+        d = defaultdict(list)
+        for kk, v in enumerate(e):
+            d[round(float(v), 3)].append(kk)
+        kv.append(d)
+    tol = 1e-2
+    edges = []  # (i,j,R,t,w): transform maps j -> i frame; w=撕痕边数
+    for i in range(n):
+        for j in range(i + 1, n):
+            Ai = la[i]; Aj = la[j]; na = len(Ai); nb = len(Aj); cap = min(na, nb) // 2
+            best = (0, 0, 0)
+            for ai in range(na):
+                for bj in kv[j].get(round(float(Ai[ai]), 3), []):
+                    k = 0
+                    while k < cap and abs(Ai[(ai + k) % na] - Aj[(bj - k) % nb]) < tol:
+                        k += 1
+                    if k > best[0]:
+                        best = (k, ai, bj)
+            k, ai, bj = best
+            if k < min_run:
+                continue
+            Apts = np.array([polys[i][(ai + t) % na] for t in range(k + 1)])
+            Bpts = np.array([polys[j][(bj + 1 - t) % nb] for t in range(k + 1)])
+            R, t = procrustes(Bpts, Apts)
+            if np.linalg.norm(Apts - (Bpts @ R.T + t), axis=1).mean() > 0.5:
+                continue
+            if overlap_area(transform(polys[j], R, t), polys[i]) > 0.2 * rd_poly_area(polys[j]):
+                continue
+            edges.append((i, j, R, t, k)); edges.append((j, i, R.T, -R.T @ t, k))
+    pose0 = [None] * n; pose0[0] = (np.eye(2), np.zeros(2)); placed0 = {0: polys[0].copy()}
+    if not edges:
+        return pose0, 1, placed0
+
+    def grow(i0, j0, R0, t0):
+        if overlap_area(transform(polys[j0], R0, t0), polys[i0]) > 0.2 * rd_poly_area(polys[j0]):
+            return None
+        pose = {i0: (np.eye(2), np.zeros(2)), j0: (R0, t0)}
+        placed = {i0: polys[i0].copy(), j0: transform(polys[j0], R0, t0)}
+        changed = True
+        while changed:
+            changed = False
+            cands = sorted([e for e in edges if e[0] in pose and e[1] not in pose], key=lambda e: -e[4])
+            for (p, q, R, t, w) in cands:
+                RA, tA = pose[p]; Rq, tq = RA @ R, RA @ t + tA
+                pq = transform(polys[q], Rq, tq)
+                if any(overlap_area(pq, P2) > 0.2 * rd_poly_area(polys[q]) for P2 in placed.values()):
+                    continue
+                pose[q] = (Rq, tq); placed[q] = pq; changed = True; break
+        return pose, placed
+
+    def corrob(pose):
+        s = 0.0
+        for (i, j, R, t, w) in edges:
+            if i < j and i in pose and j in pose:
+                RA, tA = pose[i]; RB, tB = pose[j]
+                Rimp = RA.T @ RB; timp = RA.T @ (tB - tA)
+                if np.linalg.norm(Rimp - R) < 0.35 and np.linalg.norm(timp - t) < 6.0:
+                    s += w
+        return s
+
+    best = None
+    for (i0, j0, R0, t0, w0) in edges:
+        g = grow(i0, j0, R0, t0)
+        if g is None:
+            continue
+        pose_h, placed_h = g
+        key = (len(placed_h), corrob(pose_h))
+        if best is None or key > best[0]:
+            best = (key, pose_h, placed_h)
+    if best is None:
+        return pose0, 1, placed0
+    _, pose_h, placed_h = best
+    return [pose_h.get(k) for k in range(n)], len(placed_h), placed_h
+
+
 def evaluate(placed):
     if len(placed) < 2:
         return {}
@@ -288,7 +377,7 @@ def main():
     cells = torn_tessellation(args.G, S, args.seed)
     scattered = scatter(cells, S, args.seed)
     t0 = time.time()
-    pose, placed, pp = solve(scattered, min_inl=args.min_inl, K=args.K, seed=args.seed)
+    pose, placed, pp = solve_v2(scattered, K=args.K, min_run=args.min_inl, seed=args.seed)
     dt = time.time() - t0
     met = evaluate(pp)
     print(json.dumps({"G": args.G, "pieces": len(cells), "placed": placed,
