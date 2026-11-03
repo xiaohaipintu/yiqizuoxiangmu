@@ -326,6 +326,105 @@ def solve_v2(polys, K=500, eps=1.5, min_run=8, seed=0):
     return [pose_h.get(k) for k in range(n)], len(placed_h), placed_h
 
 
+def _icp_seam(src_pts, treeDst, ptsDst, R, t, iters=5, radius=8.0):
+    for _ in range(iters):
+        d, idx = treeDst.query(src_pts @ R.T + t, distance_upper_bound=radius)
+        m = np.isfinite(d)
+        if m.sum() < 8:
+            break
+        R, t = procrustes(src_pts[m], ptsDst[idx[m]], np.ones(int(m.sum())))
+    return R, t
+
+
+def solve_v3(polys, min_verts=12, tol_len=3.0, res_tol=2.2, seed=0):
+    """容错版（面向真实分割噪声）：近似边长反序 + 形状残差(Procrustes) + ICP 精修 + 全局一致性装配。
+
+    与 v2 的区别：不再要求「精确等长」，而允许边长差 ≤ tol_len；用对应顶点的 Procrustes 残差
+    作为「形状是否真的对得上」的判据（假匹配残差大），再 ICP 精修。这样能容忍分割出的轮廓噪声。
+    """
+    from collections import defaultdict
+    n = len(polys)
+    polys = [p if signed_area(p) > 0 else p[::-1] for p in polys]
+    Ls = [np.array([np.linalg.norm(p[(k + 1) % len(p)] - p[k]) for k in range(len(p))]) for p in polys]
+    dense = [resample(p, 1.5) for p in polys]
+    dtrees = [cKDTree(d) for d in dense]
+    edges = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            Li = Ls[i]; Lj = Ls[j]; na = len(Li); nb = len(Lj); cap = min(na, nb) // 2
+            qb = defaultdict(list)
+            for bj in range(nb):
+                qb[round(float(Lj[bj]) / tol_len)].append(bj)
+            best = None  # (k, -res, (R,t), Bpts)
+            for ai in range(na):
+                qa = round(float(Li[ai]) / tol_len)
+                for dq in (-1, 0, 1):
+                    for bj in qb.get(qa + dq, []):
+                        k = 0
+                        while k < cap and abs(Li[(ai + k) % na] - Lj[(bj - k) % nb]) < tol_len:
+                            k += 1
+                        if k < min_verts:
+                            continue
+                        Apts = np.array([polys[i][(ai + t) % na] for t in range(k + 1)])
+                        Bpts = np.array([polys[j][(bj + 1 - t) % nb] for t in range(k + 1)])
+                        R, tp = procrustes(Bpts, Apts)
+                        res = float(np.linalg.norm(Apts - (Bpts @ R.T + tp), axis=1).mean())
+                        if res < res_tol and (best is None or (k, -res) > (best[0], best[1])):
+                            best = (k, -res, (R, tp), Bpts, Apts)
+            if best is None:
+                continue
+            k, nres, RT, Bpts, Apts = best
+            R, tp = RT
+            R, tp = _icp_seam(Bpts, dtrees[i], dense[i], R, tp)
+            if overlap_area(transform(polys[j], R, tp), polys[i]) > 0.25 * rd_poly_area(polys[j]):
+                continue
+            edges.append((i, j, R, tp, k)); edges.append((j, i, R.T, -R.T @ tp, k))
+    pose0 = [None] * n; pose0[0] = (np.eye(2), np.zeros(2)); placed0 = {0: polys[0].copy()}
+    if not edges:
+        return pose0, 1, placed0
+
+    def grow(i0, j0, R0, t0):
+        if overlap_area(transform(polys[j0], R0, t0), polys[i0]) > 0.3 * rd_poly_area(polys[j0]):
+            return None
+        pose = {i0: (np.eye(2), np.zeros(2)), j0: (R0, t0)}
+        placed = {i0: polys[i0].copy(), j0: transform(polys[j0], R0, t0)}
+        changed = True
+        while changed:
+            changed = False
+            cands = sorted([e for e in edges if e[0] in pose and e[1] not in pose], key=lambda e: -e[4])
+            for (p, q, R, t, w) in cands:
+                RA, tA = pose[p]; Rq, tq = RA @ R, RA @ t + tA
+                pq = transform(polys[q], Rq, tq)
+                if any(overlap_area(pq, P2) > 0.3 * rd_poly_area(polys[q]) for P2 in placed.values()):
+                    continue
+                pose[q] = (Rq, tq); placed[q] = pq; changed = True; break
+        return pose, placed
+
+    def corrob(pose):
+        s = 0.0
+        for (i, j, R, t, w) in edges:
+            if i < j and i in pose and j in pose:
+                RA, tA = pose[i]; RB, tB = pose[j]
+                Rimp = RA.T @ RB; timp = RA.T @ (tB - tA)
+                if np.linalg.norm(Rimp - R) < 0.4 and np.linalg.norm(timp - t) < 8.0:
+                    s += w
+        return s
+
+    best = None
+    for (i0, j0, R0, t0, w0) in edges:
+        g = grow(i0, j0, R0, t0)
+        if g is None:
+            continue
+        pose_h, placed_h = g
+        key = (len(placed_h), corrob(pose_h))
+        if best is None or key > best[0]:
+            best = (key, pose_h, placed_h)
+    if best is None:
+        return pose0, 1, placed0
+    _, pose_h, placed_h = best
+    return [pose_h.get(k) for k in range(n)], len(placed_h), placed_h
+
+
 def evaluate(placed):
     if len(placed) < 2:
         return {}
