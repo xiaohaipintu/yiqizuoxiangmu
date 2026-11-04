@@ -1,12 +1,5 @@
-// 临时校验：抽出页面里的纯几何引擎，在 Node 里跑切割用例
-const fs = require('fs');
-const path = require('path');
-const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-const m = html.match(/<script id="cut-engine">([\s\S]*?)<\/script>/);
-if (!m) { console.error('FAIL: 找不到 #cut-engine 脚本块'); process.exit(1); }
-const code = m[1];
-new Function(code + '\nif(typeof CutEngine==="undefined")throw new Error("no CutEngine");')();
-const CutEngine = new Function(code + '\nreturn CutEngine;')();
+// 切割引擎回归测试：直接在 Node 里跑纯几何引擎（cut-engine.js）
+const CutEngine = require('./cut-engine.js');
 
 let fail = 0;
 function ok(name, cond, extra) {
