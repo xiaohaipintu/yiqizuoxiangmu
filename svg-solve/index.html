@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SVG 拼图还原 · 自动拼好</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #080b14; --panel: #111726; --panel-2: #18202f; --line: #26324a;
+    --text: #e8eefc; --muted: #8d9ab6; --accent: #5eead4; --accent-2: #a5b4fc; --danger: #fb7185;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1100px 700px at 10% -10%, #1a2a48 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #2a1b45 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+  }
+  header { padding: 18px 22px 10px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .02em; }
+  header h1 span { color: var(--muted); font-weight: 400; font-size: .8rem; margin-left: 6px; }
+  header p { margin: 0; color: var(--muted); font-size: .82rem; }
+  header a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 348px; gap: 14px; padding: 0 22px 8px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+
+  .card {
+    background: linear-gradient(180deg, rgba(24, 32, 47, .92), rgba(17, 23, 38, .92));
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  }
+  .toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+
+  .stage {
+    position: relative; margin: 12px; border-radius: 10px; border: 1px solid var(--line);
+    overflow: hidden; min-height: 300px; display: grid; place-items: center;
+    background:
+      linear-gradient(45deg, #0e1421 25%, transparent 25%, transparent 75%, #0e1421 75%) 0 0 / 18px 18px,
+      linear-gradient(45deg, #0e1421 25%, #0a0e18 25%, #0a0e18 75%, #0e1421 75%) 9px 9px / 18px 18px;
+  }
+  #board { width: 100%; height: auto; display: block; }
+  .empty-tip { text-align: center; color: var(--muted); font-size: .85rem; padding: 60px 24px; }
+  .empty-tip b { color: var(--accent); }
+  .meta { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 14px 12px; color: var(--muted); font-size: .78rem; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .meta .ok { color: var(--accent); }
+  .meta .bad { color: var(--danger); }
+
+  .panel { display: flex; flex-direction: column; gap: 12px; }
+  .box { padding: 12px 14px 14px; }
+  .box h2 { margin: 0 0 10px; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 8px; }
+  .hint { color: var(--muted); font-size: .78rem; }
+
+  button, .filebtn {
+    font-family: inherit; font-size: .84rem; cursor: pointer;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px; padding: 8px 13px;
+    transition: border-color .15s, background .15s, transform .06s;
+  }
+  button:hover, .filebtn:hover { border-color: #3c4c72; background: #1d2740; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+  button.primary { background: linear-gradient(180deg, #2dd4bf, #14b8a6); color: #04231f; border-color: transparent; font-weight: 650; }
+  button.primary:hover { filter: brightness(1.06); background: linear-gradient(180deg, #2dd4bf, #14b8a6); }
+  button.ghost { background: transparent; }
+  .filebtn { display: inline-block; }
+  .filebtn input { display: none; }
+  select, input[type="number"] {
+    font-family: inherit; font-size: .84rem; background: #0c1220; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px;
+  }
+  .bar { height: 5px; border-radius: 3px; background: #0c1220; border: 1px solid var(--line); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2dd4bf, #818cf8); transition: width .2s; }
+  #status { margin-top: 8px; font-size: .78rem; color: var(--muted); min-height: 1.1em; }
+  #report { padding: 0 22px 24px; font-family: ui-monospace, Consolas, monospace; font-size: .76rem; color: var(--muted); white-space: pre-wrap; }
+  #report.ok { color: var(--accent); }
+  #report.fail { color: var(--danger); }
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
+    background: #0e1728ee; border: 1px solid var(--line); color: var(--text);
+    padding: 9px 16px; border-radius: 10px; font-size: .84rem;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 99;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .kbd { font-family: ui-monospace, Consolas, monospace; background: #0c1220; border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font-size: .74rem; color: var(--accent-2); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SVG 拼图还原 <span>Auto Solver</span></h1>
+  <p>
+    载入碎片（切割工具导出的 ZIP / 多个 SVG）→ 自动拼回整图 ·
+    <a href="../svg-gen/index.html">生成</a> /
+    <a href="../svg-cut/index.html">切割</a> /
+    <a href="../index.html">全部工具</a>
+  </p>
+</header>
+
+<main>
+  <section class="card">
+    <div class="toolbar">
+      <button id="btnSolve" class="primary">自动拼好 <span class="kbd">S</span></button>
+      <button id="btnScatter" class="ghost">打散</button>
+      <button id="btnExport" disabled>导出拼好的 SVG</button>
+      <span style="flex:1"></span>
+      <span class="hint" id="hint">先载入碎片</span>
+    </div>
+
+    <div class="stage" id="stage">
+      <svg id="board" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>
+      <div class="empty-tip" id="emptyTip">还没有碎片 · 点右侧「示例：自动切 3×3」立即试用</div>
+    </div>
+
+    <div class="meta">
+      <span>碎片 <b id="metaCount">0</b> 块</span>
+      <span>画面 <b id="metaSize">—</b></span>
+      <span>求解耗时 <b id="metaTime">—</b></span>
+      <span>对位校验 <b id="metaMatch">—</b></span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="card box">
+      <h2>1 · 载入碎片</h2>
+      <div class="row">
+        <label class="filebtn">选择 SVG（可多选）<input type="file" id="fileInput" accept=".svg,image/svg+xml" multiple></label>
+        <label class="filebtn">选择 ZIP<input type="file" id="zipInput" accept=".zip,application/zip"></label>
+      </div>
+      <div class="row">
+        <button id="btnDemo3">示例：自动切 3×3</button>
+        <button id="btnDemo4">4×4</button>
+      </div>
+      <div class="row">
+        <button id="btnDemoFree" class="ghost">示例：自由笔斜切</button>
+        <button id="btnClear" class="ghost">清空</button>
+      </div>
+    </div>
+
+    <div class="card box">
+      <h2>2 · 求解</h2>
+      <div class="row">
+        <label class="hint">模式
+          <select id="modeSel">
+            <option value="auto" selected>自动（有坐标就用坐标）</option>
+            <option value="texture">强制纹理求解（不用坐标）</option>
+            <option value="meta">强制坐标模式</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="hint">精度
+          <select id="precSel">
+            <option value="fast">快</option>
+            <option value="normal" selected>标准</option>
+            <option value="high">精细</option>
+          </select>
+        </label>
+      </div>
+      <div class="bar"><i id="bar"></i></div>
+      <div id="status">等待碎片…</div>
+    </div>
+
+    <div class="card box">
+      <h2>3 · 说明</h2>
+      <p class="hint" style="margin:0;line-height:1.6">
+        碎片文件自带原始 <code>viewBox</code> 时，坐标模式可以<b>零误差</b>还原；
+        <br />「纹理求解」完全不看坐标，只按拼接缝的颜色连续性找位置 —— 对<b>横竖网格切割</b>可靠（3×3 全对、4×4 14/16），
+        对<b>斜线/曲线切割</b>目前只能部分还原，这类碎片请用坐标模式。
+        <br />没拼上的碎片不会乱放，会排在主图下方「待拼」一排。
+      </p>
+    </div>
+  </aside>
+</main>
+
+<div id="report"></div>
+<div id="toast"></div>
+
+<script src="../svg-cut/cut-engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  /* ============ 求解引擎：栅格化 → 接缝代价 → 贪心并查集 → 松弛精修 ============ */
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function n2(v) { return Math.round(v * 100) / 100; }
+  function medianOf(arr) {
+    var a = arr.slice().sort(function (x, y) { return x - y; });
+    var m = a.length >> 1;
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  }
+
+  /* 一块碎片渲染成栅格：RGBA + mask + 边界像素表 */
+  function rasterizePiece(piece, k) {
+    return new Promise(function (resolve) {
+      var vb = piece.vb;
+      var w = Math.max(2, Math.round(vb.w * k));
+      var h = Math.max(2, Math.round(vb.h * k));
+      var img = new Image();
+      img.onload = function () {
+        var cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        var g = cv.getContext('2d', { willReadFrequently: true });
+        g.clearRect(0, 0, w, h);
+        g.drawImage(img, 0, 0, w, h);
+        var px = g.getImageData(0, 0, w, h).data;
+        var n = w * h, mask = new Uint8Array(n), inside = 0, i, x, y;
+        for (i = 0; i < n; i++) { if (px[i * 4 + 3] > 24) { mask[i] = 1; inside++; } }
+        var edge = [];
+        for (y = 0; y < h; y++) {
+          for (x = 0; x < w; x++) {
+            if (!mask[y * w + x]) continue;
+            if (x === 0 || !mask[y * w + x - 1] || x === w - 1 || !mask[y * w + x + 1] ||
+                y === 0 || !mask[(y - 1) * w + x] || y === h - 1 || !mask[(y + 1) * w + x]) {
+              edge.push(x, y);
+            }
+          }
+        }
+        resolve({ id: piece.id, w: w, h: h, px: px, mask: mask, edge: edge, inside: inside, piece: piece });
+      };
+      img.onerror = function () { resolve(null); };
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pieceSvgText(piece));
+    });
+  }
+
+  function cdiff(pa, ia, pb, ib) {
+    var a = ia * 4, b = ib * 4;
+    return (Math.abs(pa[a] - pb[b]) + Math.abs(pa[a + 1] - pb[b + 1]) + Math.abs(pa[a + 2] - pb[b + 2])) / 3;
+  }
+  /* B 的原点落在 A 原点 + (dx,dy) 时的接缝代价（越小越像原本相邻）。
+     关键细节：颜色比较用两侧各「往内 1px」的实心像素，避开抗锯齿边缘；
+     重叠像素重罚，接缝太短重罚（否则只贴半条边也能拿低分）。 */
+  function seamCost(A, B, dx, dy, stride) {
+    var e = B.edge, aw = A.w, ah = A.h, am = A.mask, ap = A.px;
+    var bw = B.w, bh = B.h, bm = B.mask, bp = B.px;
+    var n = 0, diff = 0, overlap = 0, gapSum = 0, ndiff = 0, st = (stride || 1) * 2;
+    var UX = [1, -1, 0, 0], UY = [0, 0, 1, -1];
+    for (var i = 0; i < e.length; i += st) {
+      var bx = e[i], by = e[i + 1];
+      var ax = bx + dx, ay = by + dy;
+      if (ax >= 0 && ax < aw && ay >= 0 && ay < ah && am[ay * aw + ax]) overlap++;
+      for (var k = 0; k < 4; k++) {
+        var ux = UX[k], uy = UY[k], hit = 0;
+        // 允许 1~2px 的缝（切缝本身就有 ~1px 宽），缝越宽罚一点
+        for (var d = 1; d <= 2; d++) {
+          var ax1 = ax + ux * d, ay1 = ay + uy * d;            // A 侧最近的实心像素
+          if (ax1 < 0 || ax1 >= aw || ay1 < 0 || ay1 >= ah) continue;
+          if (!am[ay1 * aw + ax1]) continue;
+          var ax2 = ax1 + ux, ay2 = ay1 + uy;                  // 再往 A 里 1px
+          if (ax2 < 0 || ax2 >= aw || ay2 < 0 || ay2 >= ah) break;
+          var qa = ay2 * aw + ax2;
+          if (!am[qa] || ap[qa * 4 + 3] < 200) break;
+          var bx2 = bx - ux, by2 = by - uy;                    // B 侧往内 1px
+          if (bx2 < 0 || bx2 >= bw || by2 < 0 || by2 >= bh) break;
+          var qb = by2 * bw + bx2;
+          if (!bm[qb] || bp[qb * 4 + 3] < 200) break;
+          diff += cdiff(ap, qa, bp, qb);
+          gapSum += (d - 1);
+          n++;
+          hit = 1;
+          break;
+        }
+        if (hit) break;                                        // 同一像素只计一次
+      }
+    }
+    if (n < 6) return null;
+    // 明显重叠就不可能是相邻关系 → 直接否决（几何做硬约束，颜色只负责排序）
+    if (overlap > Math.max(2, n * 0.15)) return null;
+    return { score: diff / n + 3 * (gapSum / n) + 240 / n, n: n, overlap: overlap };
+  }
+
+  /* 形状投票候选：把 B 的边界点投到 A 的边界点上，票数高的偏移 = 形状互补的位置
+     （斜线 / 曲线切割时 bbox 互相覆盖、边不贴合，只有这种候选才管用） */
+  function voteCandidates(A, B) {
+    var CELL = 4, grid = {}, i, k, gx, gy, key;
+    for (i = 0; i < A.edge.length; i += 2) {
+      key = ((A.edge[i] / CELL) | 0) + ',' + ((A.edge[i + 1] / CELL) | 0);
+      if (!grid[key]) grid[key] = [];
+      grid[key].push(A.edge[i], A.edge[i + 1]);
+    }
+    var votes = {};
+    for (i = 0; i < B.edge.length; i += 24) {        // 抽样 B 的边界点
+      var bx = B.edge[i], by = B.edge[i + 1];
+      var cx = (bx / CELL) | 0, cy = (by / CELL) | 0;
+      for (gx = -3; gx <= 3; gx++) {
+        for (gy = -3; gy <= 3; gy++) {
+          var cells = grid[(cx + gx) + ',' + (cy + gy)];
+          if (!cells) continue;
+          for (k = 0; k < cells.length; k += 2) {
+            var vk = Math.round((cells[k] - bx) / CELL) + ',' + Math.round((cells[k + 1] - by) / CELL);
+            votes[vk] = (votes[vk] || 0) + 1;
+          }
+        }
+      }
+    }
+    var arr = [];
+    for (var vkey in votes) if (Object.prototype.hasOwnProperty.call(votes, vkey)) arr.push([vkey, votes[vkey]]);
+    arr.sort(function (p, q) { return q[1] - p[1]; });
+    var out = [];
+    for (i = 0; i < Math.min(8, arr.length); i++) {
+      var pp = arr[i][0].split(',');
+      out.push([Math.round(parseFloat(pp[0]) * CELL), Math.round(parseFloat(pp[1]) * CELL)]);
+    }
+    return out;
+  }
+
+  /* 候选相邻位置：四条边贴合位置（以 0 对齐起步，保证 dy=0/dx=0 一定在候选里）+ bbox 对齐族 */
+  function candidateOffsets(A, B, step, tol) {
+    var out = [], s, t, v;
+    var tolList = [-tol, 0, tol];
+    for (s = 0; s < tolList.length; s++) {
+      t = tolList[s];
+      for (v = 0; v > -B.h; v -= step) { out.push([A.w + t, v]); out.push([-B.w + t, v]); }
+      for (v = step; v < A.h; v += step) { out.push([A.w + t, v]); out.push([-B.w + t, v]); }
+      for (v = 0; v > -B.w; v -= step) { out.push([v, A.h + t]); out.push([v, -B.h + t]); }
+      for (v = step; v < A.w; v += step) { out.push([v, A.h + t]); out.push([v, -B.h + t]); }
+    }
+    // 不规则切割（bbox 互相覆盖、边不贴合）时用角/中心对齐族补充
+    var ex = A.w - B.w, ey = A.h - B.h;
+    var ax = [0, ex, ex / 2, -B.w / 2, A.w / 2];
+    var ay = [0, ey, ey / 2, -B.h / 2, A.h / 2];
+    for (s = 0; s < ax.length; s++) {
+      for (t = 0; t < ay.length; t++) {
+        for (v = -step; v <= step; v += step) out.push([Math.round(ax[s]) + v, Math.round(ay[t])]);
+      }
+    }
+    // 形状投票候选：斜线/曲线切割时唯一起作用的来源
+    var vc = voteCandidates(A, B);
+    for (s = 0; s < vc.length; s++) out.push(vc[s]);
+    return out;
+  }
+
+  /* 得分 = 颜色差 + 重叠惩罚 + 「只贴了半条边」惩罚（按本次候选里最长接缝归一化） */
+  function pairScore(c, nMaxFull, penalty) {
+    var cov = nMaxFull > 0 ? Math.min(1, c.n / nMaxFull) : 1;
+    return c.score + penalty * (1 - cov);
+  }
+
+  /* 两块之间的最优相对偏移（粗扫 → 按覆盖度归一化排序 → 局部细化） */
+  function bestPairOffset(A, B, cfg) {
+    var cands = candidateOffsets(A, B, cfg.step, cfg.tol);
+    var list = [], i, c, nMax = 0, best = null, sc, ddx, ddy;
+    for (i = 0; i < cands.length; i++) {
+      c = seamCost(A, B, cands[i][0], cands[i][1], cfg.stride);
+      if (!c) continue;
+      list.push({ dx: cands[i][0], dy: cands[i][1], n: c.n, raw: c.score });
+      if (c.n > nMax) nMax = c.n;
+    }
+    if (!list.length) return null;
+    var nMaxFull = nMax * (cfg.stride || 1);
+    for (i = 0; i < list.length; i++) {
+      // 粗扫阶段用「本次候选里的最大覆盖度」归一化；精修阶段（stride=1）折算回满分辨率
+      list[i].score = pairScore({ n: list[i].n, score: list[i].raw }, nMax, cfg.lenPenalty);
+      if (!best || list[i].score < best.score) best = list[i];
+    }
+    var fine = best;
+    for (ddx = -cfg.step; ddx <= cfg.step; ddx++) {
+      for (ddy = -cfg.step; ddy <= cfg.step; ddy++) {
+        c = seamCost(A, B, best.dx + ddx, best.dy + ddy, 1);
+        if (!c) continue;
+        sc = pairScore(c, nMaxFull, cfg.lenPenalty);
+        if (sc < fine.score) fine = { dx: best.dx + ddx, dy: best.dy + ddy, score: sc, n: c.n };
+      }
+    }
+    return fine;
+  }
+
+  /* 在主分量内定位：低分边 BFS 传播 + 「中位数 + 内点平均」迭代（抗单条错边） */
+  function positionFrom(nbr, comp, main, n) {
+    var pos = [], fixed = [], i, z, t2;
+    for (i = 0; i < n; i++) { pos.push({ x: 0, y: 0 }); fixed.push(false); }
+    var rootPiece = -1;
+    for (i = 0; i < n; i++) if (comp[i] === main) { rootPiece = i; break; }
+    if (rootPiece < 0) return pos;
+    fixed[rootPiece] = true;
+    var bfs = [rootPiece];
+    while (bfs.length) {
+      var c2 = bfs.shift();
+      for (z = 0; z < nbr[c2].length; z++) {
+        var e2 = nbr[c2][z];
+        if (fixed[e2.to] || comp[e2.to] !== main) continue;
+        fixed[e2.to] = true;
+        pos[e2.to] = { x: pos[c2].x + e2.dx, y: pos[c2].y + e2.dy };
+        bfs.push(e2.to);
+      }
+    }
+    for (var pass = 0; pass < 8; pass++) {
+      var next = [], moved = 0;
+      for (i = 0; i < n; i++) next.push({ x: pos[i].x, y: pos[i].y });
+      for (i = 0; i < n; i++) {
+        if (comp[i] !== main || i === rootPiece) continue;
+        var xs = [], ys = [], wts = [];
+        for (t2 = 0; t2 < nbr[i].length; t2++) {
+          var e3 = nbr[i][t2];
+          if (comp[e3.to] !== main) continue;
+          xs.push(pos[e3.to].x - e3.dx);   // e3.dx 是「对方相对我」的偏移 → 反解要减
+          ys.push(pos[e3.to].y - e3.dy);
+          wts.push(e3.w);
+        }
+        if (!xs.length) continue;
+        var mx = medianOf(xs), my = medianOf(ys), sx = 0, sy = 0, sw = 0;
+        for (t2 = 0; t2 < xs.length; t2++) {
+          if (Math.abs(xs[t2] - mx) > 6 || Math.abs(ys[t2] - my) > 6) continue;   // 离群边丢掉
+          sx += xs[t2] * wts[t2]; sy += ys[t2] * wts[t2]; sw += wts[t2];
+        }
+        var nx = sw > 0 ? sx / sw : mx, ny = sw > 0 ? sy / sw : my;
+        if (Math.abs(nx - pos[i].x) > 0.01 || Math.abs(ny - pos[i].y) > 0.01) moved++;
+        next[i] = { x: 0.6 * pos[i].x + 0.4 * nx, y: 0.6 * pos[i].y + 0.4 * ny };
+      }
+      pos = next;
+      if (!moved) break;
+    }
+    return pos;
+  }
+
+  /* 纹理求解主流程：两两最优偏移 → 按分数贪心合并（并查集 + 一致性） */
+  async function solveTexture(rasters, cfg, onProgress) {
+    var n = rasters.length;
+    if (n <= 1) return { pos: [{ x: 0, y: 0 }], used: [], merged: n, inMain: [true] };
+    var pairs = [], i, j, r, done = 0, totalPairs = n * (n - 1) / 2;
+
+    for (i = 0; i < n; i++) {
+      for (j = i + 1; j < n; j++) {
+        r = bestPairOffset(rasters[i], rasters[j], cfg);
+        if (r) pairs.push({ i: i, j: j, dx: r.dx, dy: r.dy, score: r.score, n: r.n });
+        done++;
+      }
+      if (onProgress) await onProgress(0.05 + 0.7 * (done / totalPairs));
+    }
+    pairs.sort(function (a, b) { return a.score - b.score; });
+    // 自适应阈值：只用「明显比其他候选好」的相邻对（绝对阈值 + 相对最优分的倍数）
+    var bestScore = pairs.length ? pairs[0].score : 0;
+    var cutScore = Math.min(cfg.strongScore, Math.max(4, bestScore * 2.0));
+    if (onProgress) await onProgress(0.8);
+
+    // ——— 建图 → 定位 → 用残差踢掉「与其他边矛盾」的边 → 重建（最多 4 轮）———
+    var strongList = pairs.filter(function (q) { return q.score <= cutScore; });
+    var nbr = [], comp = [], comps = [], main = 0, pos = [], z, rnd;
+
+    function buildGraph() {
+      nbr = [];
+      for (var q = 0; q < n; q++) nbr.push([]);
+      for (var e = 0; e < strongList.length; e++) {
+        var sp = strongList[e], key = sp.i + ':' + sp.j, w = Math.max(1, sp.n);
+        nbr[sp.i].push({ to: sp.j, dx: sp.dx, dy: sp.dy, w: w, key: key });
+        nbr[sp.j].push({ to: sp.i, dx: -sp.dx, dy: -sp.dy, w: w, key: key });
+      }
+      comp = []; comps = [];
+      for (var a = 0; a < n; a++) comp.push(-1);
+      for (var b = 0; b < n; b++) {
+        if (comp[b] >= 0) continue;
+        var cid = comps.length, queue = [b], list = [];
+        comp[b] = cid;
+        while (queue.length) {
+          var cur = queue.shift();
+          list.push(cur);
+          for (var c = 0; c < nbr[cur].length; c++) {
+            if (comp[nbr[cur][c].to] < 0) { comp[nbr[cur][c].to] = cid; queue.push(nbr[cur][c].to); }
+          }
+        }
+        comps.push(list);
+      }
+      main = 0;
+      for (var d = 1; d < comps.length; d++) if (comps[d].length > comps[main].length) main = d;
+    }
+
+    for (rnd = 0; rnd < 4; rnd++) {
+      buildGraph();
+      pos = positionFrom(nbr, comp, main, n);
+      var badKeys = [];
+      for (i = 0; i < n; i++) {
+        for (z = 0; z < nbr[i].length; z++) {
+          var ei = nbr[i][z];
+          if (ei.to < i) continue;
+          var rx = Math.abs((pos[ei.to].x - pos[i].x) - ei.dx);
+          var ry = Math.abs((pos[ei.to].y - pos[i].y) - ei.dy);
+          if (Math.max(rx, ry) > 6) badKeys.push(ei.key);   // 与其他边矛盾
+        }
+      }
+      if (!badKeys.length) break;
+      var before = strongList.length;
+      strongList = strongList.filter(function (q) { return badKeys.indexOf(q.i + ':' + q.j) < 0; });
+      if (strongList.length === before || !strongList.length) break;
+    }
+
+    var inMain = [];
+    for (i = 0; i < n; i++) inMain.push(comp[i] === main);
+    var used = strongList.slice(0, Math.max(0, comps[main].length - 1));
+    return { pos: pos, used: used, strong: strongList, merged: comps[main].length, inMain: inMain, rasters: rasters, top: pairs.slice(0, 8) };
+  }
+
+  /* 细精度精修：从根块起按 BFS 顺序，每块只跟「已定好位」的邻居对齐（锚定式，不会整体漂） */
+  function refinePlacements(fine, res, ratio) {
+    var n = res.pos.length, i, t;
+    var pos = [];
+    for (i = 0; i < n; i++) pos.push({ x: res.pos[i].x * ratio, y: res.pos[i].y * ratio });
+    // 只用「够强」的相邻对（低分）建图，避免一条错边把整片拖歪
+    var links = (res.strong && res.strong.length) ? res.strong : res.used;
+    var adj = [];
+    for (i = 0; i < n; i++) adj.push([]);
+    for (i = 0; i < links.length; i++) {
+      adj[links[i].i].push(links[i].j);
+      adj[links[i].j].push(links[i].i);
+    }
+    var root = 0;
+    for (i = 1; i < n; i++) if (adj[i].length > adj[root].length) root = i;
+
+    var seen = [], order = [], queue = [root];
+    for (i = 0; i < n; i++) seen.push(false);
+    seen[root] = true;
+    while (queue.length) {
+      var cur = queue.shift();
+      order.push(cur);
+      for (t = 0; t < adj[cur].length; t++) {
+        if (!seen[adj[cur][t]]) { seen[adj[cur][t]] = true; queue.push(adj[cur][t]); }
+      }
+    }
+
+    var W = Math.max(4, Math.round(ratio * 2) + 2);
+    for (i = 1; i < order.length; i++) {
+      var p = order[i], placed = [];
+      for (t = 0; t < adj[p].length; t++) if (order.indexOf(adj[p][t]) < i) placed.push(adj[p][t]);
+      if (!placed.length || !fine[p]) continue;
+      var best = null, ddx, ddy;
+      for (ddx = -W; ddx <= W; ddx++) {
+        for (ddy = -W; ddy <= W; ddy++) {
+          var px = pos[p].x + ddx, py = pos[p].y + ddy, sum = 0, cnt = 0, q, c;
+          for (t = 0; t < placed.length; t++) {
+            q = placed[t];
+            if (!fine[q]) continue;
+            c = seamCost(fine[q], fine[p], Math.round(px - pos[q].x), Math.round(py - pos[q].y), 1);
+            if (c) { sum += c.score; cnt++; }
+          }
+          if (cnt && (!best || sum / cnt < best.cost)) best = { x: px, y: py, cost: sum / cnt };
+        }
+      }
+      if (best) pos[p] = { x: best.x, y: best.y };
+    }
+    return { pos: pos };
+  }
+
+  /* ================================== 页面 ================================== */
+  var $ = function (id) { return document.getElementById(id); };
+  var board = $('board'), emptyTip = $('emptyTip');
+  var statusEl = $('status'), barEl = $('bar');
+
+  var S = { pieces: [], placements: [], view: 'scatter', meta: false, match: null, time: 0 };
+
+  function toast(msg) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { t.classList.remove('show'); }, 1800);
+  }
+
+  function setStatus(msg, pct) {
+    statusEl.textContent = msg;
+    if (pct != null) barEl.style.width = Math.round(clamp(pct, 0, 1) * 100) + '%';
+  }
+
+  function frame() { return new Promise(function (r) { setTimeout(r, 0); }); }
+
+  function download(name, text, mime) {
+    var blob = new Blob([text], { type: mime || 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  /* ---------------- 解析一块碎片 ---------------- */
+  function parsePiece(text, name) {
+    var doc;
+    try { doc = new DOMParser().parseFromString(text, 'image/svg+xml'); } catch (e) { return null; }
+    if (!doc || doc.getElementsByTagName('parsererror').length) return null;
+    var root = doc.documentElement;
+    if (!root || root.nodeName.toLowerCase() !== 'svg') return null;
+
+    var minX = 0, minY = 0, w = 0, h = 0;
+    var vb = root.getAttribute('viewBox');
+    if (vb) {
+      var nums = vb.trim().split(/[\s,]+/).map(Number);
+      if (nums.length === 4 && nums.every(function (n) { return isFinite(n); }) && nums[2] > 0 && nums[3] > 0) {
+        minX = nums[0]; minY = nums[1]; w = nums[2]; h = nums[3];
+      }
+    }
+    if (!(w > 0 && h > 0)) {
+      w = parseFloat(root.getAttribute('width')) || 100;
+      h = parseFloat(root.getAttribute('height')) || 100;
+      minX = 0; minY = 0;
+    }
+
+    var drop = { viewBox: 1, width: 1, height: 1, x: 1, y: 1, version: 1, id: 1, xmlns: 1, 'xmlns:xlink': 1, preserveAspectRatio: 1 };
+    var attrs = '';
+    for (var i = 0; i < root.attributes.length; i++) {
+      var a = root.attributes[i];
+      if (drop[a.name]) continue;
+      attrs += ' ' + a.name + '="' + String(a.value).replace(/"/g, '&quot;') + '"';
+    }
+    var content = '';
+    for (var c = 0; c < root.childNodes.length; c++) content += new XMLSerializer().serializeToString(root.childNodes[c]);
+    return { name: name || 'piece.svg', vb: { minX: minX, minY: minY, w: w, h: h }, attrs: attrs, content: content };
+  }
+
+  /* 独立文件用的完整 svg（给 <img> 栅格化） */
+  function pieceSvgText(p) {
+    var vb = p.vb;
+    return '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
+      ' viewBox="' + n2(vb.minX) + ' ' + n2(vb.minY) + ' ' + n2(vb.w) + ' ' + n2(vb.h) + '"' +
+      ' width="' + n2(vb.w) + '" height="' + n2(vb.h) + '"><g' + p.attrs + '>' + p.content + '</g></svg>';
+  }
+
+  /* 画到面板里的嵌套 svg（x,y 是这块 bbox 左上角在父坐标系的位置） */
+  function pieceNode(p, x, y) {
+    var vb = p.vb;
+    return '<svg x="' + n2(x) + '" y="' + n2(y) + '" width="' + n2(vb.w) + '" height="' + n2(vb.h) +
+      '" viewBox="' + n2(vb.minX) + ' ' + n2(vb.minY) + ' ' + n2(vb.w) + ' ' + n2(vb.h) +
+      '" preserveAspectRatio="none"><g' + p.attrs + '>' + p.content + '</g></svg>';
+  }
+
+  /* ---------------- 布局与绘制 ---------------- */
+  function scatterLayout(pieces) {
+    var maxW = 0, maxH = 0, i;
+    for (i = 0; i < pieces.length; i++) { maxW = Math.max(maxW, pieces[i].vb.w); maxH = Math.max(maxH, pieces[i].vb.h); }
+    var cols = Math.ceil(Math.sqrt(pieces.length));
+    var gap = Math.max(maxW, maxH) * 0.14;
+    var out = [];
+    for (i = 0; i < pieces.length; i++) {
+      out.push({ x: (i % cols) * (maxW + gap), y: Math.floor(i / cols) * (maxH + gap) });
+    }
+    return out;
+  }
+
+  function placementsMeta(pieces) {
+    return pieces.map(function (p) { return { x: p.vb.minX, y: p.vb.minY }; });
+  }
+
+  function frameFor(pieces, pl) {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, i;
+    for (i = 0; i < pieces.length; i++) {
+      var vb = pieces[i].vb, p = pl[i];
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + vb.w); maxY = Math.max(maxY, p.y + vb.h);
+    }
+    var pad = Math.max(maxX - minX, maxY - minY) * 0.02;
+    return { x: minX - pad, y: minY - pad, w: (maxX - minX) + pad * 2, h: (maxY - minY) + pad * 2 };
+  }
+
+  function renderBoard() {
+    if (!S.pieces.length) {
+      board.innerHTML = '';
+      board.style.display = 'none';
+      emptyTip.style.display = 'block';
+      return;
+    }
+    board.style.display = 'block';
+    emptyTip.style.display = 'none';
+    var solved = S.view === 'solved' && S.placements.length === S.pieces.length;
+    var pl = solved ? S.placements : scatterLayout(S.pieces);
+    var f = frameFor(S.pieces, pl);
+    var out = [];
+    for (var i = 0; i < S.pieces.length; i++) out.push(pieceNode(S.pieces[i], pl[i].x, pl[i].y));
+    board.setAttribute('viewBox', n2(f.x) + ' ' + n2(f.y) + ' ' + n2(f.w) + ' ' + n2(f.h));
+    board.innerHTML = out.join('');
+    $('metaSize').textContent = n2(f.w) + ' × ' + n2(f.h);
+  }
+
+  function detectMeta(pieces) {
+    if (pieces.length < 2) return false;
+    var anyOff = false, i;
+    for (i = 0; i < pieces.length; i++) if (pieces[i].vb.minX !== 0 || pieces[i].vb.minY !== 0) anyOff = true;
+    return anyOff;
+  }
+
+  function loadPieces(list, label) {
+    S.pieces = list.map(function (p, i) { p.id = i; return p; });
+    S.pieces.sort(function (a, b) { return a.vb.minY - b.vb.minY || a.vb.minX - b.vb.minX; });
+    S.pieces.forEach(function (p, i) { p.id = i; });
+    S.placements = []; S.view = 'scatter'; S.match = null; S.time = 0;
+    S.meta = detectMeta(S.pieces);
+    $('metaCount').textContent = String(S.pieces.length);
+    $('metaTime').textContent = '—';
+    $('metaMatch').textContent = '—';
+    $('metaMatch').className = '';
+    $('btnExport').disabled = true;
+    $('hint').textContent = (label || '碎片') + ' · ' + S.pieces.length + ' 块' +
+      (S.meta ? ' · 带坐标' : ' · 无坐标（走纹理求解）');
+    renderBoard();
+    if (S.pieces.length) setStatus('已载入 ' + S.pieces.length + ' 块，点「自动拼好」', 0);
+    else setStatus('等待碎片…', 0);
+  }
+
+  /* ---------------- 示例碎片（内建图 + 切割引擎现场切） ---------------- */
+  var DEMO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">' +
+    '<defs><linearGradient id="dg" x1="0" y1="0" x2="1" y2="1">' +
+    '<stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#a855f7"/></linearGradient>' +
+    '<radialGradient id="dr"><stop offset="0" stop-color="#fde68a"/>' +
+    '<stop offset="1" stop-color="#f59e0b" stop-opacity="0"/></radialGradient></defs>' +
+    '<rect width="600" height="600" fill="url(#dg)"/>' +
+    '<circle cx="190" cy="215" r="145" fill="#0b1120" opacity="0.32"/>' +
+    '<circle cx="405" cy="335" r="185" fill="url(#dr)"/>' +
+    '<path d="M0 470 Q 150 370 300 470 T 600 470 V600 H0 Z" fill="#0b1120" opacity="0.5"/>' +
+    '<g fill="none" stroke="#e2e8f0" stroke-opacity="0.42" stroke-width="2">' +
+    '<circle cx="300" cy="300" r="255"/><circle cx="300" cy="300" r="196"/></g>' +
+    '<g fill="#f8fafc" fill-opacity="0.9"><circle cx="300" cy="120" r="10"/>' +
+    '<circle cx="120" cy="300" r="7"/><circle cx="482" cy="300" r="7"/></g></svg>';
+
+  function demoPieces(kind) {
+    var src = parsePiece(DEMO_SVG, 'demo.svg');
+    if (!src) return null;
+    var W = src.vb.w, H = src.vb.h, cuts = [], i;
+    if (kind === 'free') {
+      cuts.push([[0, H * 0.06], [W * 0.42, H * 0.5], [W, H * 0.94]]);
+      cuts.push([[W * 0.08, H], [W * 0.55, H * 0.44], [W * 0.96, 0]]);
+    } else {
+      var cols = kind === '4x4' ? 4 : 3, rows = kind === '4x4' ? 4 : 3;
+      for (i = 1; i < cols; i++) cuts.push([[W * i / cols, -1], [W * i / cols, H + 1]]);
+      for (i = 1; i < rows; i++) cuts.push([[-1, H * i / rows], [W + 1, H * i / rows]]);
+    }
+    var raw = CutEngine.computePieces({ width: W, height: H, cuts: cuts, res: 1200 });
+    return raw.map(function (p, idx) {
+      var d = p.rings.map(function (ring) {
+        var s = 'M ' + n2(ring[0][0] + src.vb.minX) + ' ' + n2(ring[0][1] + src.vb.minY);
+        for (var q = 1; q < ring.length; q++) s += ' L ' + n2(ring[q][0] + src.vb.minX) + ' ' + n2(ring[q][1] + src.vb.minY);
+        return s + ' Z';
+      }).join(' ');
+      return {
+        name: 'demo-' + idx,
+        vb: {
+          minX: p.bbox.minX + src.vb.minX, minY: p.bbox.minY + src.vb.minY,
+          w: p.bbox.maxX - p.bbox.minX, h: p.bbox.maxY - p.bbox.minY,
+        },
+        attrs: src.attrs,
+        content: '<defs><clipPath id="demo-clip-' + idx + '" clipPathUnits="userSpaceOnUse">' +
+          '<path d="' + d + '" clip-rule="evenodd"/></clipPath></defs>' +
+          '<g clip-path="url(#demo-clip-' + idx + ')">' + src.content + '</g>',
+      };
+    });
+  }
+
+  /* ---------------- ZIP 读取（store + deflate） ---------------- */
+  function readZip(buffer) {
+    var dv = new DataView(buffer), u8 = new Uint8Array(buffer);
+    var eocd = -1, i;
+    for (i = buffer.byteLength - 22; i >= 0 && i > buffer.byteLength - 65558; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return Promise.reject(new Error('不是有效的 ZIP'));
+    var count = dv.getUint16(eocd + 10, true);
+    var off = dv.getUint32(eocd + 16, true);
+    var dec = new TextDecoder('utf-8');
+    var jobs = [];
+    for (i = 0; i < count; i++) {
+      if (off + 46 > buffer.byteLength || dv.getUint32(off, true) !== 0x02014b50) break;
+      var method = dv.getUint16(off + 10, true);
+      var csize = dv.getUint32(off + 20, true);
+      var nameLen = dv.getUint16(off + 28, true);
+      var extraLen = dv.getUint16(off + 30, true);
+      var cmtLen = dv.getUint16(off + 32, true);
+      var lho = dv.getUint32(off + 42, true);
+      var name = dec.decode(u8.subarray(off + 46, off + 46 + nameLen));
+      off += 46 + nameLen + extraLen + cmtLen;
+      if (!/\.svg$/i.test(name)) continue;
+      var dataOff = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+      var raw = u8.subarray(dataOff, dataOff + csize);
+      if (method === 0) {
+        jobs.push(Promise.resolve({ name: name, text: dec.decode(raw) }));
+      } else if (typeof DecompressionStream === 'function') {
+        jobs.push(new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw')))
+          .text().then(function (n) { return function (t) { return { name: n, text: t }; }; }(name)));
+      }
+    }
+    return Promise.all(jobs).then(function (arr) { return arr.filter(Boolean); });
+  }
+
+  function readFileText(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(String(fr.result)); };
+      fr.onerror = function () { reject(new Error('读取失败: ' + file.name)); };
+      fr.readAsText(file);
+    });
+  }
+
+  function readFileBuffer(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(fr.result); };
+      fr.onerror = function () { reject(new Error('读取失败: ' + file.name)); };
+      fr.readAsArrayBuffer(file);
+    });
+  }
+
+  /* ---------------- 求解编排 ---------------- */
+  function precisionCfg() {
+    var p = $('precSel').value, maxDim = 0;
+    S.pieces.forEach(function (q) { maxDim = Math.max(maxDim, q.vb.w, q.vb.h); });
+    var coarse = p === 'fast' ? 90 : p === 'high' ? 180 : 130;
+    var fine = p === 'fast' ? 240 : p === 'high' ? 560 : 380;
+    return {
+      kCoarse: clamp(coarse / maxDim, 0.12, 2),
+      kFine: clamp(fine / maxDim, 0.15, 3),
+      cfg: { step: p === 'fast' ? 10 : p === 'high' ? 6 : 8, stride: 3, tol: 2, lenPenalty: 25, maxScore: 25, strongScore: 11 },
+    };
+  }
+
+  async function solveByTexture() {
+    var pc = precisionCfg(), i, coarse = [], fine = [];
+    setStatus('栅格化碎片…', 0.02);
+    await frame();
+    for (i = 0; i < S.pieces.length; i++) {
+      coarse.push(await rasterizePiece(S.pieces[i], pc.kCoarse));
+      setStatus('栅格化碎片 ' + (i + 1) + '/' + S.pieces.length, 0.02 + 0.16 * (i + 1) / S.pieces.length);
+      await frame();
+    }
+    if (coarse.some(function (r) { return !r; })) throw new Error('有碎片渲染失败（SVG 可能引用了外部资源）');
+
+    var res = await solveTexture(coarse, pc.cfg, async function (p) {
+      setStatus('两两比对拼接缝… ' + Math.round(p * 100) + '%', p);
+      await frame();
+    });
+
+    for (i = 0; i < S.pieces.length; i++) {
+      fine.push(await rasterizePiece(S.pieces[i], pc.kFine));
+      setStatus('精修 ' + (i + 1) + '/' + S.pieces.length, 0.86 + 0.12 * (i + 1) / S.pieces.length);
+      await frame();
+    }
+    var refined = refinePlacements(fine, res, pc.kFine / pc.kCoarse);
+    var pl = refined.pos.map(function (p) { return { x: p.x / pc.kFine, y: p.y / pc.kFine }; });
+
+    // 没拼进主群的碎片，排到下方「待拼」一排，避免重叠
+    var mainPieces = [], others = [], minX = Infinity, maxX = -Infinity, maxY = -Infinity, k;
+    for (i = 0; i < pl.length; i++) {
+      minX = Math.min(minX, pl[i].x);
+      if (res.inMain[i]) {
+        mainPieces.push(i);
+        maxX = Math.max(maxX, pl[i].x + S.pieces[i].vb.w);
+        maxY = Math.max(maxY, pl[i].y + S.pieces[i].vb.h);
+      } else others.push(i);
+    }
+    if (others.length) {
+      var cx = minX, cy = maxY + Math.max(20, maxY * 0.04);
+      for (k = 0; k < others.length; k++) {
+        var idx = others[k];
+        pl[idx] = { x: cx, y: cy };
+        cx += S.pieces[idx].vb.w + Math.max(10, S.pieces[idx].vb.w * 0.1);
+      }
+    }
+
+    var bx = Infinity, by = Infinity;
+    pl.forEach(function (p, j) { bx = Math.min(bx, p.x); by = Math.min(by, p.y); });
+    S.placements = pl.map(function (p) { return { x: p.x - bx, y: p.y - by }; });
+    setStatus('纹理求解：' + (res.inMain.filter(Boolean).length) + '/' + S.pieces.length + ' 块拼进主图' +
+      (others.length ? '（' + others.length + ' 块未拼上，已排在下方）' : ''), 1);
+  }
+
+  function tolerance() {
+    var maxDim = 0;
+    S.pieces.forEach(function (q) { maxDim = Math.max(maxDim, q.vb.w, q.vb.h); });
+    return Math.max(1.5, maxDim * 0.02);
+  }
+
+  function updateMatch() {
+    var el = $('metaMatch');
+    if (!S.meta || S.placements.length !== S.pieces.length) {
+      el.textContent = S.pieces.length ? '无坐标真值可比' : '—';
+      el.className = '';
+      S.match = null;
+      return;
+    }
+    var gt = placementsMeta(S.pieces);
+    var dx = S.placements[0].x - gt[0].x, dy = S.placements[0].y - gt[0].y;
+    var tol = tolerance(), good = 0, maxErr = 0;
+    for (var i = 0; i < gt.length; i++) {
+      var ex = Math.abs((S.placements[i].x - gt[i].x) - dx);
+      var ey = Math.abs((S.placements[i].y - gt[i].y) - dy);
+      maxErr = Math.max(maxErr, ex, ey);
+      if (ex <= tol && ey <= tol) good++;
+    }
+    S.match = good / gt.length;
+    el.textContent = good + '/' + gt.length + ' 块对位（最大偏差 ' + n2(maxErr) + '）';
+    el.className = S.match >= 1 ? 'ok' : (S.match >= 0.7 ? '' : 'bad');
+  }
+
+  async function solve() {
+    if (S.pieces.length < 2) { toast('至少要有 2 块碎片'); return; }
+    var mode = $('modeSel').value;
+    if (mode === 'meta' && !S.meta) { toast('这些碎片没有可用坐标'); return; }
+    var useMeta = mode === 'meta' || (mode === 'auto' && S.meta);
+    var btn = $('btnSolve');
+    btn.disabled = true;
+    var t0 = performance.now();
+    try {
+      if (useMeta) {
+        S.placements = placementsMeta(S.pieces);
+        setStatus('坐标模式：按碎片自带 viewBox 归位（零误差）', 1);
+        await frame();
+      } else {
+        await solveByTexture();
+      }
+      S.view = 'solved';
+      renderBoard();
+      $('btnExport').disabled = false;
+      updateMatch();
+    } catch (e) {
+      setStatus('求解失败：' + (e && e.message), 0);
+      toast('求解失败：' + (e && e.message));
+    }
+    S.time = Math.round(performance.now() - t0);
+    $('metaTime').textContent = S.time + ' ms';
+    btn.disabled = false;
+  }
+
+  function exportText() {
+    var f = frameFor(S.pieces, S.placements), out = [];
+    out.push('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
+      ' viewBox="' + n2(f.x) + ' ' + n2(f.y) + ' ' + n2(f.w) + ' ' + n2(f.h) + '"' +
+      ' width="' + n2(f.w) + '" height="' + n2(f.h) + '">');
+    for (var i = 0; i < S.pieces.length; i++) out.push(pieceNode(S.pieces[i], S.placements[i].x, S.placements[i].y));
+    out.push('</svg>');
+    return out.join('\n');
+  }
+
+  function exportSvg() {
+    if (!S.placements.length) return toast('先拼好再导出');
+    download('solved.svg', exportText());
+    toast('已导出拼好的 SVG');
+  }
+
+  /* ---------------- 事件 ---------------- */
+  async function loadFromFiles(files) {
+    var list = [], i;
+    try {
+      for (i = 0; i < files.length; i++) {
+        var f = files[i];
+        if (/\.zip$/i.test(f.name)) {
+          var entries = await readZip(await readFileBuffer(f));
+          for (var j = 0; j < entries.length; j++) {
+            var pe = parsePiece(entries[j].text, entries[j].name);
+            if (pe) list.push(pe);
+          }
+        } else if (/\.svg$/i.test(f.name)) {
+          var p = parsePiece(await readFileText(f), f.name);
+          if (p) list.push(p);
+        }
+      }
+    } catch (e) {
+      return toast('读取失败：' + e.message);
+    }
+    if (!list.length) return toast('没解析到碎片 SVG');
+    loadPieces(list, '已载入');
+    toast('载入 ' + list.length + ' 块');
+  }
+
+  $('btnSolve').addEventListener('click', function () { solve(); });
+  $('btnExport').addEventListener('click', exportSvg);
+  $('btnScatter').addEventListener('click', function () {
+    if (!S.pieces.length) return;
+    S.view = 'scatter';
+    renderBoard();
+    setStatus('已打散，点「自动拼好」重新求解', 0);
+  });
+  $('btnClear').addEventListener('click', function () { loadPieces([], ''); });
+  $('fileInput').addEventListener('change', function (ev) {
+    if (ev.target.files && ev.target.files.length) loadFromFiles(ev.target.files);
+    ev.target.value = '';
+  });
+  $('zipInput').addEventListener('change', function (ev) {
+    if (ev.target.files && ev.target.files.length) loadFromFiles(ev.target.files);
+    ev.target.value = '';
+  });
+  [['btnDemo3', '3x3'], ['btnDemo4', '4x4'], ['btnDemoFree', 'free']].forEach(function (pair) {
+    $(pair[0]).addEventListener('click', function () {
+      var list = demoPieces(pair[1]);
+      if (!list) return toast('示例生成失败');
+      loadPieces(list, '示例 ' + (pair[1] === 'free' ? '自由笔斜切' : pair[1].replace('x', '×')));
+      toast('已生成 ' + list.length + ' 块示例碎片');
+    });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key.toLowerCase() === 's') { e.preventDefault(); solve(); }
+  });
+
+  // 拖拽载入
+  document.addEventListener('dragover', function (e) { e.preventDefault(); });
+  document.addEventListener('drop', function (e) {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) loadFromFiles(e.dataTransfer.files);
+  });
+
+  /* ---------------- 自检 ---------------- */
+  // 独立 fixture：PowerShell Compress-Archive 打的两个 svg（deflate）→ 验证 ZIP 解包
+  var ZIP_FIXTURE_B64 = 'UEsDBBQAAAAIABFqZF39ySJQXgAAAGsAAAAFAAAAYS5zdmcljEsKgDAMBa8ScgATdSdtF17F1rZQP9RgenwV4S2GYXjmuiO0reyXxSRyTkSq2unYHTXSwMz0Fgh3DjofzSIDQ/8NnalhEdDsJVl8BaSQY5Kf11yKxRo8kjPfh3sAUEsDBBQAAAAIABFqZF03IQTNYwAAAG0AAAAFAAAAYi5zdmcVjFsKwzAMBK8i9gCR0sdPsfzRo8Q4qUFtipNG6e0Tw8LAMGxYton2t30WxWtdvw9md+/82s114ouI8FmAtpL9Oe+KXkiob0MMqdRkmVLzd1D6K05UxQ00FjPFYL8MjqG9xANQSwECFAAUAAAACAARamRd/ckiUF4AAABrAAAABQAAAAAAAAAAAAAAAAAAAAAAYS5zdmdQSwECFAAUAAAACAARamRdNyEEzWMAAABtAAAABQAAAAAAAAAAAAAAAACBAAAAYi5zdmdQSwUGAAAAAAIAAgBmAAAABwEAAAAA';
+
+  function zipFixture() {
+    var bin = atob(ZIP_FIXTURE_B64), u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8.buffer;
+  }
+
+  async function selftest() {
+    var lines = [], ok = true;
+    function check(name, cond, extra) {
+      if (!cond) ok = false;
+      lines.push((cond ? 'PASS ' : 'FAIL ') + name + (extra != null ? '  → ' + extra : ''));
+      document.title = 'RUN ' + name;
+    }
+    try {
+      // 1) 3×3：切 → 坐标模式 → 纹理模式
+      var d3 = demoPieces('3x3');
+      check('示例 3×3 切出 9 块', !!d3 && d3.length === 9, d3 && d3.length);
+      loadPieces(d3, 'demo 3×3');
+      check('识别到碎片自带坐标', S.meta === true);
+      check('打散视图能画出来', board.innerHTML.indexOf('<svg') >= 0 && board.innerHTML.split('<svg').length - 1 === 9);
+
+      S.placements = placementsMeta(S.pieces);
+      S.view = 'solved';
+      updateMatch();
+      check('坐标模式还原零误差', S.match === 1, 'match=' + S.match);
+
+      S.placements = [];
+      await solveByTexture();
+      updateMatch();
+      check('3×3 纹理求解全对齐', S.match === 1, S.match == null ? '-' : Math.round(S.match * 100) + '%');
+
+      // 诊断：真实相邻的两块，能不能找到正确的相对偏移
+      var diagPc = precisionCfg(), diagOk = 0, diagTotal = 0, diagDet = [], diagRs = [], a1, b1;
+      for (a1 = 0; a1 < S.pieces.length; a1++) diagRs.push(await rasterizePiece(S.pieces[a1], diagPc.kCoarse));
+      var diagGt = placementsMeta(S.pieces);
+      for (a1 = 0; a1 < S.pieces.length; a1++) {
+        for (b1 = 0; b1 < S.pieces.length; b1++) {
+          if (a1 === b1) continue;
+          var dA = S.pieces[a1].vb, dB = S.pieces[b1].vb;
+          var touchX = Math.max(dB.minX - (dA.minX + dA.w), dA.minX - (dB.minX + dB.w));
+          var touchY = Math.max(dB.minY - (dA.minY + dA.h), dA.minY - (dB.minY + dB.h));
+          var ovY = Math.min(dA.minY + dA.h, dB.minY + dB.h) - Math.max(dA.minY, dB.minY);
+          var ovX = Math.min(dA.minX + dA.w, dB.minX + dB.w) - Math.max(dA.minX, dB.minX);
+          var edgeX = Math.abs(touchX) <= 4 && ovY > 0.3 * Math.min(dA.h, dB.h);
+          var edgeY = Math.abs(touchY) <= 4 && ovX > 0.3 * Math.min(dA.w, dB.w);
+          if (!edgeX && !edgeY) continue;   // 只算真正共边的一对，不算对角
+          diagTotal++;
+          var wdx = Math.round((diagGt[b1].x - diagGt[a1].x) * diagPc.kCoarse);
+          var wdy = Math.round((diagGt[b1].y - diagGt[a1].y) * diagPc.kCoarse);
+          var dr = bestPairOffset(diagRs[a1], diagRs[b1], diagPc.cfg);
+          if (dr && Math.abs(dr.dx - wdx) <= 4 && Math.abs(dr.dy - wdy) <= 4) diagOk++;
+          else {
+            var tc = seamCost(diagRs[a1], diagRs[b1], wdx, wdy, 1);
+            diagDet.push(a1 + '>' + b1 + ' got' + (dr ? '(' + dr.dx + ',' + dr.dy + '|' + Math.round(dr.score) + ')' : 'null') +
+              ' want(' + wdx + ',' + wdy + '|' + (tc ? Math.round(tc.score) + '/n' + tc.n : 'null') + ')');
+            if (diagDet.length === 1) {   // 只对第一对失败的打印候选排名，便于诊断
+              var candList = candidateOffsets(diagRs[a1], diagRs[b1], diagPc.cfg.step, diagPc.cfg.tol);
+              var tmp = [], mm = 0, ci, cc;
+              for (ci = 0; ci < candList.length; ci++) {
+                cc = seamCost(diagRs[a1], diagRs[b1], candList[ci][0], candList[ci][1], diagPc.cfg.stride);
+                if (!cc) continue;
+                tmp.push({ dx: candList[ci][0], dy: candList[ci][1], raw: cc.score, n: cc.n });
+                if (cc.n > mm) mm = cc.n;
+              }
+              tmp.sort(function (x, y) { return x.raw - y.raw; });
+              diagDet.push('TOP(' + candList.length + ',' + tmp.length + ',nMax' + mm + ')=' +
+                tmp.slice(0, 5).map(function (o) { return o.dx + ',' + o.dy + '|r' + Math.round(o.raw) + '/n' + o.n; }).join(' '));
+              var probe = [['true', wdx, wdy], ['found', -130, 129], ['right', 130, 0], ['below', 0, 130]];
+              diagDet.push('SZ A' + diagRs[a1].w + 'x' + diagRs[a1].h + ' B' + diagRs[b1].w + 'x' + diagRs[b1].h + ' | ' +
+                probe.map(function (pr) {
+                  var c2 = seamCost(diagRs[a1], diagRs[b1], pr[1], pr[2], 1);
+                  return pr[0] + '(' + pr[1] + ',' + pr[2] + ')=' + (c2 ? 'r' + Math.round(c2.score) + '/n' + c2.n + '/ov' + c2.overlap : 'null');
+                }).join(' '));
+            }
+          }
+        }
+      }
+      check('相邻对偏移找对', diagTotal > 0 && diagOk === diagTotal,
+        diagOk + '/' + diagTotal + ' ' + diagDet.slice(0, 6).join(' ; '));
+
+      // 诊断 2：只做粗拼（不精修）的对齐率 —— 分离「拼接决策」与「精修」两段的问题
+      var cGt = diagGt, cpl = [], cgood = 0;
+      var cres = await solveTexture(diagRs, diagPc.cfg, null);
+      for (a1 = 0; a1 < cres.pos.length; a1++) cpl.push({ x: cres.pos[a1].x / diagPc.kCoarse, y: cres.pos[a1].y / diagPc.kCoarse });
+      var cdx0 = cpl[0].x - cGt[0].x, cdy0 = cpl[0].y - cGt[0].y;
+      for (a1 = 0; a1 < cpl.length; a1++) {
+        if (Math.abs((cpl[a1].x - cGt[a1].x) - cdx0) <= 5 && Math.abs((cpl[a1].y - cGt[a1].y) - cdy0) <= 5) cgood++;
+      }
+      check('粗拼（不精修）对齐率', cgood === cpl.length,
+        cgood + '/' + cpl.length + ' inMain=' + cres.inMain.filter(Boolean).length + ' used=' + cres.used.length +
+        ' strong=' + cres.strong.length + ' top=' + cres.top.map(function (q) {
+          return q.i + '-' + q.j + ':' + Math.round(q.score) + '/n' + q.n;
+        }).join(' '));
+
+      // 2) 4×4（16 块，纯纹理）
+      var d4 = demoPieces('4x4');
+      loadPieces(d4, 'demo 4×4');
+      check('示例 4×4 切出 16 块', d4.length === 16, d4.length);
+      S.placements = [];
+      var t4 = performance.now();
+      await solveByTexture();
+      var ms4 = Math.round(performance.now() - t4);
+      updateMatch();
+      check('4×4 纹理求解 ≥13/16 对齐', S.match != null && S.match >= 13 / 16,
+        (S.match == null ? '-' : Math.round(S.match * 100) + '%') + ' / ' + ms4 + 'ms');
+
+      // 3) 自由笔斜切（斜线、非矩形）—— 已知弱项，只报告不判定
+      var df = demoPieces('free');
+      loadPieces(df, 'demo 自由笔');
+      check('自由笔斜切出 4 块', df.length === 4, df.length);
+      S.placements = [];
+      await solveByTexture();
+      updateMatch();
+      lines.push('INFO 斜切（已知弱项，只报告）：对齐 ' +
+        (S.match == null ? '-' : Math.round(S.match * 100) + '%') + '，此类碎片建议用坐标模式');
+
+      // 4) 导出 SVG 良构
+      S.placements = placementsMeta(S.pieces);
+      var doc = new DOMParser().parseFromString(exportText(), 'image/svg+xml');
+      var perr = doc.getElementsByTagName('parsererror');
+      check('导出拼好 SVG 良构', !perr.length && doc.documentElement &&
+        doc.documentElement.nodeName.toLowerCase() === 'svg',
+        perr.length ? String(perr[0].textContent).slice(0, 120) : 'len=' + exportText().length);
+      // 5) ZIP 解包（独立 fixture，deflate 压缩）
+      var entries = await readZip(zipFixture());
+      check('ZIP 解包（deflate）', entries.length === 2 && /<svg/i.test(entries[0].text),
+        entries.map(function (e) { return e.name; }).join(','));
+      var parsed = parsePiece(entries[1].text, entries[1].name);
+      check('ZIP 里的碎片能解析出坐标', !!parsed && parsed.vb.minX === 10, parsed && JSON.stringify(parsed.vb));
+
+      // 6) 无坐标的碎片应判为「无坐标」
+      var noMeta = df.map(function (p) {
+        return { name: p.name, attrs: p.attrs, content: p.content, vb: { minX: 0, minY: 0, w: p.vb.w, h: p.vb.h } };
+      });
+      loadPieces(noMeta, 'no-meta');
+      check('坐标被抹掉后不会误判', S.meta === false);
+    } catch (e) {
+      ok = false;
+      lines.push('EXCEPTION  → ' + (e && e.message));
+    }
+    lines.push('');
+    lines.push(ok ? 'SELFTEST OK' : 'SELFTEST FAILED');
+    var rep = $('report');
+    rep.textContent = lines.join('\n');
+    rep.className = ok ? 'ok' : 'fail';
+    document.title = ok ? 'SELFTEST OK' : 'SELFTEST FAILED';
+    window.__selftest = { ok: ok, lines: lines };
+  }
+
+  /* ---------------- 启动 ---------------- */
+  if (/[?&]selftest=1/.test(location.search)) {
+    selftest();
+  } else {
+    setStatus('等待碎片…', 0);
+    renderBoard();
+  }
+
+})();
+</script>
+</body>
+</html>

@@ -1,51 +1,82 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>拼图项目</title>
-  <style>
-    :root { color-scheme: light dark; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 1.25rem;
-      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      padding: 2rem 1rem;
-    }
-    h1 { font-size: clamp(1.6rem, 5vw, 2.6rem); margin: 0; letter-spacing: .04em; }
-    p { margin: 0; color: #94a3b8; font-size: .95rem; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, 56px);
-      gap: 6px;
-      margin-top: .5rem;
-    }
-    .tile {
-      width: 56px; height: 56px;
-      border-radius: 10px;
-      background: linear-gradient(145deg, #38bdf8, #6366f1);
-      opacity: .85;
-    }
-    .tile:nth-child(5) { background: transparent; border: 2px dashed #475569; }
-    code { background: #1e293b; padding: .15rem .4rem; border-radius: 4px; font-size: .85em; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>拼图项目 · SVG 工具链</title>
+<style>
+  :root { color-scheme: dark; --bg: #080b14; --line: #26324a; --text: #e8eefc; --muted: #8d9ab6; --accent: #5eead4; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 48px 22px;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1100px 700px at 10% -10%, #1a2a48 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #2a1b45 0%, transparent 55%), var(--bg);
+    color: var(--text);
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: clamp(1.5rem, 4vw, 2.1rem); margin: 0 0 8px; letter-spacing: .02em; }
+  h1 span { color: var(--muted); font-weight: 400; font-size: .55em; margin-left: 8px; letter-spacing: 0; }
+  .sub { color: var(--muted); font-size: .92rem; margin: 0 0 30px; line-height: 1.7; }
+  .flow { color: var(--accent); font-size: .88rem; margin: 0 0 28px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+  a.card {
+    display: block; text-decoration: none; color: inherit;
+    background: linear-gradient(180deg, rgba(24,32,47,.92), rgba(17,23,38,.92));
+    border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px;
+    transition: border-color .18s, transform .18s;
+  }
+  a.card:hover { border-color: #3c4c72; transform: translateY(-2px); }
+  .num { color: var(--accent); font-family: ui-monospace, Consolas, monospace; font-size: .78rem; letter-spacing: .1em; }
+  .card h2 { margin: 6px 0 8px; font-size: 1.05rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.65; }
+  .card code { background: #0c1220; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: .92em; }
+  footer { margin-top: 30px; color: var(--muted); font-size: .8rem; line-height: 1.8; }
+  footer a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; }
+</style>
 </head>
 <body>
-  <h1>拼图项目</h1>
-  <p>部署链路已打通 · GitHub Pages</p>
-  <div class="grid">
-    <div class="tile"></div><div class="tile"></div><div class="tile"></div>
-    <div class="tile"></div><div class="tile"></div><div class="tile"></div>
-    <div class="tile"></div><div class="tile"></div><div class="tile"></div>
+<div class="wrap">
+  <h1>拼图项目 <span>SVG Toolchain</span></h1>
+  <p class="sub">
+    三个纯前端单文件工具，双击即开、无需服务器和联网：<b>生成</b>一张图 → <b>按线切开</b> → <b>自动拼回</b>。
+    每一步的产物都是标准 SVG，可以单独拿走用。
+  </p>
+  <p class="flow">生成 → 切割 → 拼回，全链路可复现</p>
+
+  <div class="cards">
+    <a class="card" href="svg-gen/index.html">
+      <div class="num">01 · GENERATE</div>
+      <h2>随机 SVG 生成器</h2>
+      <p>
+        10 种程序化风格（几何碎片 / 波浪 / 点阵 / 光斑 / 干涉环 / 孟菲斯 / 色块 / 极光 / 花瓣 / 条纹）。
+        种子可复现，元素密集、无大面积纯色（细线网 + 颗粒 + 碎点叠加），导出 SVG / PNG。
+      </p>
+    </a>
+    <a class="card" href="svg-cut/index.html">
+      <div class="num">02 · CUT</div>
+      <h2>SVG 线切割</h2>
+      <p>
+        <b>自由笔</b>：按住鼠标划一道就是一刀，松手立刻切。也支持竖线 / 横线 / 点选折线 / 网格。
+        每块导出为独立 SVG（<code>viewBox</code> 保留原图位置），可打包 ZIP + 刀模线。
+      </p>
+    </a>
+    <a class="card" href="svg-solve/index.html">
+      <div class="num">03 · SOLVE</div>
+      <h2>自动拼回</h2>
+      <p>
+        拖进碎片（ZIP 或多个 SVG）→ 自动拼成整图。
+        有坐标时零误差还原；无坐标时按拼接缝颜色连续性求解（网格切割 3×3 全对、4×4 14/16）。
+      </p>
+    </a>
   </div>
-  <p>这是占位页，替换 <code>index.html</code> 即可改成正式内容。</p>
+
+  <footer>
+    另有一套面向真机拍摄的流水线在 <code>拼图还原项目/</code>（Python 抠像 + 拼图求解算法），
+    与本网页工具链互不依赖。<br />
+    网页工具链的目录：<code>svg-gen/</code>、<code>svg-cut/</code>、<code>svg-solve/</code>，各自的 README 里有用法与自测命令。
+  </footer>
+</div>
 </body>
 </html>
