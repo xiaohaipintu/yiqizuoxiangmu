@@ -2,8 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-const code = html.match(/<script>([\s\S]*)<\/script>/)[1];
+const code = fs.readFileSync(path.join(__dirname, 'gen-core.js'), 'utf8');
 
 function mkStub(name) {
   const t = {
@@ -34,11 +33,9 @@ global.Image = function () {};
 global.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 global.localStorage = { getItem: () => null, setItem() {} };
 
-// 只取 buildArt 相关：把 IIFE 末尾改成挂到 window 上再跑
-const patched = code.replace(/\}\)\(\);\s*$/, '  window.__gen = { buildArt: buildArt, STYLES: STYLES };\n})();\n');
-new Function('document', 'window', patched)(global.document, global.window);
-const api = global.window.__gen;
-if (!api) { console.error('FAIL: 拿不到 buildArt'); process.exit(1); }
+// 生成核心现在是独立模块（纯函数，无 DOM 依赖），直接 require
+const api = require('./gen-core.js');
+if (!api || !api.buildArt) { console.error('FAIL: 拿不到 buildArt'); process.exit(1); }
 
 const STYLES = Object.keys(api.STYLES);
 const SEEDS = ['a1', 'zzz', '2026', 'k7', 'q9', 'seed-x', 'luna', '42'];

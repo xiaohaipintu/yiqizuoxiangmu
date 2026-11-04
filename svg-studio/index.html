@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SVG 拼图工作台 · 生成 → 切割 → 自动拼回</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #080b14; --panel: #111726; --panel-2: #18202f; --line: #26324a;
+    --text: #e8eefc; --muted: #8d9ab6; --accent: #5eead4; --accent-2: #a5b4fc; --danger: #fb7185;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1100px 700px at 10% -10%, #1a2a48 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #2a1b45 0%, transparent 55%), var(--bg);
+    color: var(--text);
+  }
+  header { padding: 16px 22px 10px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 1.12rem; margin: 0; }
+  header h1 span { color: var(--muted); font-weight: 400; font-size: .8rem; margin-left: 6px; }
+  header p { margin: 0; color: var(--muted); font-size: .8rem; }
+  header b { color: var(--accent); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 372px; gap: 14px; padding: 0 22px 10px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+
+  .card { background: linear-gradient(180deg, rgba(24,32,47,.92), rgba(17,23,38,.92)); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+
+  .stage {
+    position: relative; margin: 12px; border-radius: 10px; border: 1px solid var(--line); overflow: hidden;
+    display: grid; place-items: center; min-height: 320px;
+    background:
+      linear-gradient(45deg, #0e1421 25%, transparent 25%, transparent 75%, #0e1421 75%) 0 0 / 18px 18px,
+      linear-gradient(45deg, #0e1421 25%, #0a0e18 25%, #0a0e18 75%, #0e1421 75%) 9px 9px / 18px 18px;
+  }
+  #board { width: 100%; height: auto; display: block; touch-action: none; }
+  #board.drawing { cursor: crosshair; }
+  .empty-tip { text-align: center; color: var(--muted); font-size: .86rem; padding: 70px 24px; line-height: 1.9; }
+  .empty-tip b { color: var(--accent); }
+
+  .meta { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 14px 12px; color: var(--muted); font-size: .78rem; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .meta b.ok { color: var(--accent); }
+  .meta b.bad { color: var(--danger); }
+
+  .panel { display: flex; flex-direction: column; gap: 12px; }
+  .box { padding: 12px 14px 14px; }
+  .box h2 { margin: 0 0 10px; font-size: .76rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .box h2 i { color: var(--accent); font-style: normal; margin-right: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 8px; }
+  .hint { color: var(--muted); font-size: .78rem; line-height: 1.6; }
+
+  button, .filebtn {
+    font-family: inherit; font-size: .84rem; cursor: pointer;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 13px; transition: border-color .15s, background .15s;
+  }
+  button:hover { border-color: #3c4c72; background: #1d2740; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: linear-gradient(180deg, #2dd4bf, #14b8a6); color: #04231f; border-color: transparent; font-weight: 650; }
+  button.ghost { background: transparent; }
+  select { font-family: inherit; font-size: .84rem; background: #0c1220; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+  .bar { height: 5px; border-radius: 3px; background: #0c1220; border: 1px solid var(--line); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2dd4bf, #818cf8); transition: width .2s; }
+  #status { margin-top: 8px; font-size: .78rem; color: var(--muted); min-height: 1.2em; }
+  .seg { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { background: transparent; border: 0; color: var(--muted); padding: 7px 12px; border-radius: 0; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: linear-gradient(180deg, #2c3c5c, #23324d); color: #fff; }
+  .kbd { font-family: ui-monospace, Consolas, monospace; background: #0c1220; border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font-size: .74rem; color: var(--accent-2); }
+  #report { padding: 0 22px 24px; font-family: ui-monospace, Consolas, monospace; font-size: .74rem; color: var(--muted); white-space: pre-wrap; }
+  #report.ok { color: var(--accent); } #report.fail { color: var(--danger); }
+  #toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px); background: #0e1728ee; border: 1px solid var(--line); padding: 9px 16px; border-radius: 10px; font-size: .84rem; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 99; }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  footer { padding: 0 22px 26px; color: var(--muted); font-size: .78rem; }
+  footer a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SVG 拼图工作台 <span>Studio</span></h1>
+  <p>一个页面跑完全程：<b>生成</b> → <b>切割</b> → <b>打散</b> → <b>自动拼回</b>。
+     求解器<b>不读任何坐标</b>（碎片切割后坐标已清零），只按像素接缝拼。</p>
+</header>
+
+<main>
+  <section class="card">
+    <div class="toolbar">
+      <button id="btnAll" class="primary">一键跑全程 <span class="kbd">A</span></button>
+      <button id="btnGen">① 重新生成</button>
+      <button id="btnCut">② 切割</button>
+      <button id="btnSolveNow">③ 打散并自动拼好 <span class="kbd">S</span></button>
+      <span style="flex:1"></span>
+      <button id="btnExport" class="ghost" disabled>导出拼好的 SVG</button>
+    </div>
+
+    <div class="stage" id="stage">
+      <svg id="board" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"></svg>
+      <div class="empty-tip" id="emptyTip">点左上角 <b>一键跑全程</b>，或按顺序点 ①②③</div>
+    </div>
+
+    <div class="meta">
+      <span>阶段 <b id="mStage">空</b></span>
+      <span>碎片 <b id="mCount">0</b> 块</span>
+      <span>画布 <b id="mSize">—</b></span>
+      <span>求解 <b id="mTime">—</b></span>
+      <span>对位校验 <b id="mMatch">—</b></span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="card box">
+      <h2><i>①</i>生成</h2>
+      <div class="row">
+        <label class="hint">风格
+          <select id="styleSel"></select>
+        </label>
+        <button id="btnSeed" class="ghost">换种子</button>
+      </div>
+      <div class="row"><span class="hint">种子 <b id="mSeed">—</b></span></div>
+    </div>
+
+    <div class="card box">
+      <h2><i>②</i>切割</h2>
+      <div class="row">
+        <div class="seg" id="cutSeg">
+          <button data-cut="3x3" class="on">3×3</button>
+          <button data-cut="4x4">4×4</button>
+          <button data-cut="5x5">5×5</button>
+          <button data-cut="free">自由笔</button>
+        </div>
+      </div>
+      <div class="row">
+        <span class="hint" id="cutHint">网格切割：选好网格后点「② 切割」</span>
+      </div>
+    </div>
+
+    <div class="card box">
+      <h2><i>③</i>求解</h2>
+      <div class="bar"><i id="barFill"></i></div>
+      <div id="status">等待生成…</div>
+    </div>
+
+    <div class="card box">
+      <h2>说明</h2>
+      <p class="hint" style="margin:0">
+        切割时每块碎片的 <code>viewBox</code> 会被清成 <code>0 0 w h</code> 并重新排布 ——
+        求解器拿到的只有像素，<b>拿不到原位置</b>，不存在抄答案。
+        <br />底部「对位校验」是求解完才做的比对，只用于给你看效果。
+      </p>
+    </div>
+  </aside>
+</main>
+
+<div id="report"></div>
+<div id="toast"></div>
+<footer>
+  单独工具：<a href="../svg-gen/index.html">随机生成器</a> ·
+  <a href="../svg-cut/index.html">线切割</a> ·
+  <a href="../svg-solve/index.html">拼回（含坐标模式）</a> ·
+  <a href="../index.html">全部工具</a>
+</footer>
+
+<script src="../svg-cut/cut-engine.js"></script>
+<script src="../svg-gen/gen-core.js"></script>
+<script src="../svg-solve/solver-core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const board = $('board'), stage = $('stage'), emptyTip = $('emptyTip');
+  const n2 = (v) => Math.round(v * 100) / 100;
+  const n1 = (v) => Math.round(v * 10) / 10;
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const frame = () => new Promise((r) => setTimeout(r, 0));
+
+  const S = {
+    seed: '', styleId: '', src: null,     // 源图
+    pieces: [],                            // 无坐标碎片（vb 原点已清零）
+    truth: [],                             // 仅用于事后校验，求解器看不到
+    placements: [], view: 'empty',
+    cutMode: '3x3', stroke: null, busy: false, match: null, ms: 0,
+  };
+
+  function toast(msg) {
+    const t = $('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => t.classList.remove('show'), 1700);
+  }
+  function setStatus(msg, pct) {
+    $('status').textContent = msg;
+    if (pct != null) $('barFill').style.width = Math.round(clamp(pct, 0, 1) * 100) + '%';
+  }
+  function setStage(name) { $('mStage').textContent = name; }
+
+  /* ---------------- ① 生成 ---------------- */
+  function genArt(seed, styleId) {
+    const size = [720, 720];
+    const out = GenCore.buildArt({ seed, style: styleId, size, grain: true });
+    const doc = new DOMParser().parseFromString(out.svg, 'image/svg+xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('生成的 SVG 解析失败');
+    const root = doc.documentElement;
+    const vb = (root.getAttribute('viewBox') || '0 0 720 720').trim().split(/[\s,]+/).map(Number);
+    let content = '';
+    for (let i = 0; i < root.childNodes.length; i++) content += new XMLSerializer().serializeToString(root.childNodes[i]);
+    return { text: out.svg, vb: { minX: vb[0], minY: vb[1], w: vb[2], h: vb[3] }, content, styleId: out.styleId };
+  }
+
+  function generate() {
+    S.seed = Math.random().toString(36).slice(2, 9);
+    S.src = genArt(S.seed, $('styleSel').value);
+    S.pieces = []; S.placements = []; S.truth = []; S.match = null; S.ms = 0;
+    S.view = 'source';
+    $('mSeed').textContent = S.seed;
+    $('mCount').textContent = '0';
+    $('mTime').textContent = '—';
+    $('mMatch').textContent = '—'; $('mMatch').className = '';
+    $('btnExport').disabled = true;
+    render();
+    setStage('已生成');
+    setStatus('已生成 ' + (GenCore.STYLES[S.src.styleId] || { name: S.src.styleId }).name + ' · 下一步点「② 切割」', 0.15);
+  }
+
+  /* ---------------- ② 切割（碎片坐标清零） ---------------- */
+  function ringPath(rings, dx, dy) {
+    return rings.map((ring) => {
+      let s = 'M ' + n2(ring[0][0] + dx) + ' ' + n2(ring[0][1] + dy);
+      for (let i = 1; i < ring.length; i++) s += ' L ' + n2(ring[i][0] + dx) + ' ' + n2(ring[i][1] + dy);
+      return s + ' Z';
+    }).join(' ');
+  }
+
+  function cutCuts() {
+    const vb = S.src.vb;
+    if (S.cutMode === 'free') {
+      if (!S.stroke || S.stroke.length < 2) return null;
+      return [S.stroke.map((p) => [p[0] - vb.minX, p[1] - vb.minY])];
+    }
+    const n = parseInt(S.cutMode, 10);
+    const cuts = [];
+    for (let i = 1; i < n; i++) cuts.push([[vb.w * i / n, -2], [vb.w * i / n, vb.h + 2]]);
+    for (let j = 1; j < n; j++) cuts.push([[-2, vb.h * j / n], [vb.w + 2, vb.h * j / n]]);
+    return cuts;
+  }
+
+  function cut() {
+    if (!S.src) return toast('先点「重新生成」');
+    const vb = S.src.vb;
+    const cuts = cutCuts();
+    if (!cuts) return toast('自由笔：先在图上按住划一道');
+
+    const raw = CutEngine.computePieces({ width: vb.w, height: vb.h, cuts, res: 1100 });
+    if (!raw.length) return toast('没切出碎片');
+    if (raw.length > 40) return toast('切出 ' + raw.length + ' 块，太多了（≤40）');
+
+    // ---- 关键：每块只保留自己的局部几何，原位置清零 ----
+    S.pieces = raw.map((p, i) => {
+      const bw = p.bbox.maxX - p.bbox.minX, bh = p.bbox.maxY - p.bbox.minY;
+      const dLocal = ringPath(p.rings, -p.bbox.minX, -p.bbox.minY);   // 局部坐标
+      return {
+        id: i,
+        vb: { minX: 0, minY: 0, w: bw, h: bh },                       // 位置信息清零
+        attrs: '',
+        content: '<defs><clipPath id="pc' + i + '" clipPathUnits="userSpaceOnUse">' +
+          '<path d="' + dLocal + '" clip-rule="evenodd"/></clipPath></defs>' +
+          '<g clip-path="url(#pc' + i + ')"><g transform="translate(' +
+          n2(-(p.bbox.minX + vb.minX)) + ',' + n2(-(p.bbox.minY + vb.minY)) + ')">' +
+          S.src.content + '</g></g>',
+      };
+    });
+    // 真值（只有校验用，求解前不参与任何计算）
+    S.truth = raw.map((p) => ({ x: p.bbox.minX, y: p.bbox.minY }));
+
+    S.placements = scatter();
+    S.view = 'pieces';
+    S.match = null; S.ms = 0;
+    $('mCount').textContent = String(S.pieces.length);
+    $('mTime').textContent = '—';
+    $('mMatch').textContent = '—'; $('mMatch').className = '';
+    $('btnExport').disabled = true;
+    render();
+    setStage('已切割');
+    setStatus('切出 ' + S.pieces.length + ' 块（坐标已清零）· 下一步点「③ 打散并自动拼好」', 0.4);
+  }
+
+  function scatter() {
+    const maxW = Math.max.apply(null, S.pieces.map((p) => p.vb.w));
+    const maxH = Math.max.apply(null, S.pieces.map((p) => p.vb.h));
+    const cols = Math.ceil(Math.sqrt(S.pieces.length));
+    const gap = Math.max(maxW, maxH) * 0.16;
+    return S.pieces.map((p, i) => ({ x: (i % cols) * (maxW + gap), y: Math.floor(i / cols) * (maxH + gap) }));
+  }
+
+  /* ---------------- ③ 自动拼回（只吃像素） ---------------- */
+  async function solvePuzzle() {
+    if (S.pieces.length < 2) return toast('先切割');
+    if (S.busy) return;
+    S.busy = true;
+    $('btnSolveNow').disabled = true;
+    const t0 = performance.now();
+    const maxDim = Math.max.apply(null, S.pieces.map((p) => Math.max(p.vb.w, p.vb.h)));
+    const kCoarse = clamp(180 / maxDim, 0.12, 2);
+    const kFine = clamp(380 / maxDim, 0.15, 3);
+    const cfg = { step: 8, stride: 3, tol: 2, lenPenalty: 25, maxScore: 25, strongScore: 11 };
+
+    try {
+      const rC = [], rF = [];
+      for (let i = 0; i < S.pieces.length; i++) {
+        rC.push(await SolverCore.rasterizePiece(S.pieces[i], kCoarse));
+        setStatus('栅格化 ' + (i + 1) + '/' + S.pieces.length, 0.45 + 0.1 * (i + 1) / S.pieces.length);
+        await frame();
+      }
+      if (rC.some((r) => !r)) throw new Error('有碎片渲染失败');
+
+      const res = await SolverCore.solveTexture(rC, cfg, async (p) => {
+        setStatus('比对拼接缝… ' + Math.round(p * 100) + '%', 0.55 + 0.2 * p);
+        await frame();
+      });
+
+      for (let i = 0; i < S.pieces.length; i++) {
+        rF.push(await SolverCore.rasterizePiece(S.pieces[i], kFine));
+        setStatus('精修 ' + (i + 1) + '/' + S.pieces.length, 0.78 + 0.18 * (i + 1) / S.pieces.length);
+        await frame();
+      }
+      const ref = SolverCore.refinePlacements(rF, res, kFine / kCoarse);
+      const pl = ref.pos.map((p) => ({ x: p.x / kFine, y: p.y / kFine }));
+
+      // 没拼进主群的，排到下方「待拼」一排
+      let minX = Infinity, maxY = -Infinity, maxX = -Infinity;
+      pl.forEach((p, i) => {
+        if (!res.inMain[i]) return;
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x + S.pieces[i].vb.w);
+        maxY = Math.max(maxY, p.y + S.pieces[i].vb.h);
+      });
+      let cx = isFinite(minX) ? minX : 0;
+      const cy = (isFinite(maxY) ? maxY : 0) + Math.max(24, maxDim * 0.12);
+      let others = 0;
+      pl.forEach((p, i) => {
+        if (res.inMain[i]) return;
+        others++;
+        pl[i] = { x: cx, y: cy };
+        cx += S.pieces[i].vb.w + Math.max(12, maxDim * 0.06);
+      });
+      const ox = Math.min.apply(null, pl.map((p) => p.x));
+      const oy = Math.min.apply(null, pl.map((p) => p.y));
+      S.placements = pl.map((p) => ({ x: p.x - ox, y: p.y - oy }));
+      S.view = 'solved';
+      S.ms = Math.round(performance.now() - t0);
+      render();
+      verify();
+      $('mTime').textContent = S.ms + ' ms';
+      $('btnExport').disabled = false;
+      setStage('已拼好');
+      setStatus('拼好 ' + (S.pieces.length - others) + '/' + S.pieces.length + ' 块' +
+        (others ? '（' + others + ' 块未拼上，排在下方）' : '') + ' · ' + S.ms + ' ms', 1);
+    } catch (e) {
+      setStatus('求解失败：' + (e && e.message), 0);
+      toast('求解失败：' + (e && e.message));
+    }
+    S.busy = false;
+    $('btnSolveNow').disabled = false;
+  }
+
+  /* 事后校验：拿真值比一比（求解时完全没用到） */
+  function verify() {
+    const el = $('mMatch');
+    if (!S.truth.length || !S.placements.length) { el.textContent = '—'; return; }
+    const tol = Math.max(1.5, Math.max.apply(null, S.pieces.map((p) => Math.max(p.vb.w, p.vb.h))) * 0.03);
+    const dx = S.placements[0].x - S.truth[0].x;
+    const dy = S.placements[0].y - S.truth[0].y;
+    let good = 0, worst = 0;
+    for (let i = 0; i < S.truth.length; i++) {
+      const ex = Math.abs((S.placements[i].x - S.truth[i].x) - dx);
+      const ey = Math.abs((S.placements[i].y - S.truth[i].y) - dy);
+      worst = Math.max(worst, ex, ey);
+      if (ex <= tol && ey <= tol) good++;
+    }
+    S.match = good / S.truth.length;
+    el.textContent = good + '/' + S.truth.length + ' 块对位（最大偏差 ' + n2(worst) + '）';
+    el.className = S.match >= 0.999 ? 'ok' : (S.match >= 0.7 ? '' : 'bad');
+  }
+
+  /* ---------------- 绘制 ---------------- */
+  function pieceNode(p, x, y) {
+    const vb = p.vb;
+    return '<svg x="' + n2(x) + '" y="' + n2(y) + '" width="' + n2(vb.w) + '" height="' + n2(vb.h) +
+      '" viewBox="0 0 ' + n2(vb.w) + ' ' + n2(vb.h) + '" preserveAspectRatio="none">' +
+      p.content + '</svg>';
+  }
+
+  function render() {
+    emptyTip.style.display = S.view === 'empty' ? 'block' : 'none';
+    board.style.display = S.view === 'empty' ? 'none' : 'block';
+    if (S.view === 'empty') { board.innerHTML = ''; return; }
+
+    if (S.view === 'source') {
+      const vb = S.src.vb;
+      board.setAttribute('viewBox', vb.minX + ' ' + vb.minY + ' ' + vb.w + ' ' + vb.h);
+      board.innerHTML = '<g>' + S.src.content + '</g>' + (S.stroke ? strokeMarkup() : '');
+      stage.style.aspectRatio = vb.w + ' / ' + vb.h;
+      $('mSize').textContent = vb.w + ' × ' + vb.h;
+      return;
+    }
+    const pl = S.placements;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    pl.forEach((p, i) => {
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + S.pieces[i].vb.w); maxY = Math.max(maxY, p.y + S.pieces[i].vb.h);
+    });
+    const pad = Math.max(maxX - minX, maxY - minY) * 0.03;
+    board.setAttribute('viewBox', n2(minX - pad) + ' ' + n2(minY - pad) + ' ' + n2(maxX - minX + pad * 2) + ' ' + n2(maxY - minY + pad * 2));
+    let html = '';
+    for (let i = 0; i < S.pieces.length; i++) html += pieceNode(S.pieces[i], pl[i].x, pl[i].y);
+    board.innerHTML = html + (S.stroke ? strokeMarkup() : '');
+    stage.style.aspectRatio = (maxX - minX + pad * 2) + ' / ' + (maxY - minY + pad * 2);
+    $('mSize').textContent = n2(maxX - minX) + ' × ' + n2(maxY - minY);
+  }
+
+  function strokeMarkup() {
+    if (!S.stroke || S.stroke.length < 2) return '';
+    const sw = Math.max(S.src.vb.w, S.src.vb.h) * 0.006;
+    return '<polyline points="' + S.stroke.map((p) => n2(p[0]) + ',' + n2(p[1])).join(' ') +
+      '" fill="none" stroke="#5eead4" stroke-width="' + n2(sw) + '" stroke-linecap="round" stroke-dasharray="' +
+      n2(sw * 2.4) + ' ' + n2(sw * 1.6) + '"/>';
+  }
+
+  /* ---------------- 自由笔画线 ---------------- */
+  function toUser(ev) {
+    const r = board.getBoundingClientRect();
+    const vb = board.viewBox.baseVal;
+    return [vb.x + ((ev.clientX - r.left) / r.width) * vb.width,
+            vb.y + ((ev.clientY - r.top) / r.height) * vb.height];
+  }
+  let drawing = false;
+  board.addEventListener('pointerdown', (ev) => {
+    if (S.cutMode !== 'free' || S.view !== 'source') return;
+    drawing = true; S.stroke = [toUser(ev)];
+    try { board.setPointerCapture(ev.pointerId); } catch (e) {}
+    ev.preventDefault();
+    render();
+  });
+  board.addEventListener('pointermove', (ev) => {
+    if (!drawing) return;
+    const p = toUser(ev), last = S.stroke[S.stroke.length - 1];
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) > S.src.vb.w * 0.004) { S.stroke.push(p); render(); }
+  });
+  board.addEventListener('pointerup', () => {
+    if (!drawing) return;
+    drawing = false;
+    if (S.stroke && S.stroke.length > 2) {
+      setStatus('已画出一条切割线 · 点「② 切割」', 0.3);
+    } else { S.stroke = null; }
+    render();
+  });
+
+  /* ---------------- 一键全程 ---------------- */
+  async function runAll() {
+    if (S.busy) return;
+    $('btnAll').disabled = true;
+    generate();
+    await frame();
+    cut();
+    await frame();
+    await solvePuzzle();
+    $('btnAll').disabled = false;
+  }
+
+  /* ---------------- 事件 ---------------- */
+  const styleSel = $('styleSel');
+  Object.keys(GenCore.STYLES).forEach((id) => {
+    const o = document.createElement('option');
+    o.value = id; o.textContent = GenCore.STYLES[id].name;
+    styleSel.appendChild(o);
+  });
+  const anyOpt = document.createElement('option');
+  anyOpt.value = 'random'; anyOpt.textContent = '随机风格';
+  styleSel.insertBefore(anyOpt, styleSel.firstChild);
+  styleSel.value = 'random';
+
+  $('btnGen').addEventListener('click', generate);
+  $('btnSeed').addEventListener('click', generate);
+  $('btnCut').addEventListener('click', cut);
+  $('btnSolveNow').addEventListener('click', solvePuzzle);
+  $('btnAll').addEventListener('click', runAll);
+  $('btnExport').addEventListener('click', () => {
+    if (!S.placements.length) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    S.placements.forEach((p, i) => {
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + S.pieces[i].vb.w); maxY = Math.max(maxY, p.y + S.pieces[i].vb.h);
+    });
+    const out = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + n2(minX) + ' ' + n2(minY) + ' ' +
+      n2(maxX - minX) + ' ' + n2(maxY - minY) + '" width="' + n2(maxX - minX) + '" height="' + n2(maxY - minY) + '">'];
+    S.pieces.forEach((p, i) => out.push(pieceNode(p, S.placements[i].x, S.placements[i].y)));
+    out.push('</svg>');
+    const blob = new Blob([out.join('\n')], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'solved-' + S.seed + '.svg';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('已导出拼好的 SVG');
+  });
+  $('cutSeg').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-cut]');
+    if (!b) return;
+    S.cutMode = b.dataset.cut;
+    S.stroke = null;
+    Array.prototype.forEach.call($('cutSeg').querySelectorAll('button'), (x) => x.classList.toggle('on', x === b));
+    $('cutHint').textContent = S.cutMode === 'free'
+      ? '自由笔：在图上按住划一道，松手后点「② 切割」'
+      : '网格切割：选好网格后点「② 切割」';
+    board.classList.toggle('drawing', S.cutMode === 'free');
+    render();
+  });
+  document.addEventListener('keydown', (ev) => {
+    const tag = (ev.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    const k = ev.key.toLowerCase();
+    if (k === 'a') { ev.preventDefault(); runAll(); }
+    else if (k === 's') { ev.preventDefault(); solvePuzzle(); }
+  });
+
+  /* ---------------- 自检 ---------------- */
+  async function selftest() {
+    const lines = [];
+    let ok = true;
+    const check = (name, cond, extra) => {
+      if (!cond) ok = false;
+      lines.push((cond ? 'PASS ' : 'FAIL ') + name + (extra != null ? '  → ' + extra : ''));
+    };
+    try {
+      // ① 生成
+      $('styleSel').value = 'random';
+      generate();
+      check('生成一张图', !!S.src && S.src.vb.w > 0, S.src && S.src.vb.w + 'x' + S.src.vb.h);
+
+      // ② 3×3
+      S.cutMode = '3x3';
+      cut();
+      check('3×3 切出 9 块', S.pieces.length === 9, S.pieces.length);
+      const noPos = S.pieces.every((p) => p.vb.minX === 0 && p.vb.minY === 0);
+      check('碎片坐标已清零（求解器拿不到答案）', noPos);
+      const hasTruth = S.truth.length === S.pieces.length && S.truth.some((t) => t.x !== 0 || t.y !== 0);
+      check('真值只留在校验侧', hasTruth);
+
+      // ③ 求解（只喂像素）
+      await solvePuzzle();
+      check('3×3 纹理求解全对', S.match === 1, (Math.round(S.match * 100)) + '% / ' + S.ms + 'ms');
+
+      // 4×4
+      S.cutMode = '4x4';
+      cut();
+      check('4×4 切出 16 块', S.pieces.length === 16, S.pieces.length);
+      await solvePuzzle();
+      check('4×4 纹理求解 ≥13/16', S.match != null && S.match >= 13 / 16,
+        (S.match == null ? '-' : Math.round(S.match * 100) + '%') + ' / ' + S.ms + 'ms');
+
+      // 5×5（更大规模）
+      S.cutMode = '5x5';
+      cut();
+      check('5×5 切出 25 块', S.pieces.length === 25, S.pieces.length);
+      await solvePuzzle();
+      check('5×5 纹理求解 ≥12/25', S.match != null && S.match >= 12 / 25,
+        (S.match == null ? '-' : Math.round(S.match * 100) + '%') + ' / ' + S.ms + 'ms');
+
+      // 导出良构
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      S.placements.forEach((p, i) => {
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x + S.pieces[i].vb.w); maxY = Math.max(maxY, p.y + S.pieces[i].vb.h);
+      });
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + minX + ' ' + minY + ' ' +
+        (maxX - minX) + ' ' + (maxY - minY) + '">' +
+        S.pieces.map((p, i) => pieceNode(p, S.placements[i].x, S.placements[i].y)).join('') + '</svg>';
+      const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+      check('导出拼好 SVG 良构', !doc.getElementsByTagName('parsererror').length, 'len=' + svg.length);
+    } catch (e) {
+      ok = false;
+      lines.push('EXCEPTION  → ' + (e && e.message));
+    }
+    lines.push('');
+    lines.push(ok ? 'SELFTEST OK' : 'SELFTEST FAILED');
+    const rep = $('report');
+    rep.textContent = lines.join('\n');
+    rep.className = ok ? 'ok' : 'fail';
+    document.title = ok ? 'SELFTEST OK' : 'SELFTEST FAILED';
+    window.__selftest = { ok, lines };
+  }
+
+  /* ---------------- 启动 ---------------- */
+  if (/[?&]selftest=1/.test(location.search)) {
+    selftest();
+  } else {
+    render();
+    setStatus('点「一键跑全程」看整条流水线', 0);
+  }
+})();
+</script>
+</body>
+</html>
