@@ -147,6 +147,13 @@
       <div class="row">
         <span class="hint" id="cutHint">网格切割：选好网格后点「② 切割」</span>
       </div>
+      <div class="row">
+        <button id="btnUndoStroke" class="ghost">撤销上一道</button>
+        <button id="btnClearStroke" class="ghost">清空笔画</button>
+        <label class="hint" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="chkAutoCut" /> 松手自动切
+        </label>
+      </div>
     </div>
 
     <div class="card box">
@@ -194,7 +201,7 @@
     pieces: [],                            // 无坐标碎片（vb 原点已清零）
     truth: [],                             // 仅用于事后校验，求解器看不到
     placements: [], view: 'empty',
-    cutMode: '3x3', stroke: null, busy: false, match: null, ms: 0,
+    cutMode: '3x3', stroke: null, strokes: [], busy: false, match: null, ms: 0,
   };
 
   function toast(msg) {
@@ -226,6 +233,7 @@
     S.seed = Math.random().toString(36).slice(2, 9);
     S.src = genArt(S.seed, $('styleSel').value);
     S.pieces = []; S.placements = []; S.truth = []; S.match = null; S.ms = 0;
+    S.strokes = []; S.stroke = null;
     S.view = 'source';
     $('mSeed').textContent = S.seed;
     $('mCount').textContent = '0';
@@ -269,8 +277,9 @@
   function cutCuts() {
     const vb = S.src.vb;
     if (S.cutMode === 'free') {
-      if (!S.stroke || S.stroke.length < 2) return null;
-      return [S.stroke.map((p) => [p[0] - vb.minX, p[1] - vb.minY])];
+      const list = (S.strokes || []).filter((s) => s && s.length > 1)
+        .map((s) => s.map((p) => [p[0] - vb.minX, p[1] - vb.minY]));
+      return list.length ? list : null;
     }
     const n = parseInt(S.cutMode, 10);
     const cuts = [];
@@ -282,9 +291,9 @@
   function cut() {
     if (!S.src) return toast('先点「重新生成」');
     // 自由笔模式下还没画线：先回到原图视图，方便直接划
-    if (S.cutMode === 'free' && !(S.stroke && S.stroke.length > 1)) {
+    if (S.cutMode === 'free' && !(S.strokes && S.strokes.length)) {
       if (S.view !== 'source') { S.view = 'source'; render(); }
-      return toast('在原图上按住划一道，松手即切');
+      return toast('在原图上按住划一道（可连续划多道），再点「② 切割」');
     }
     const vb = S.src.vb;
     const cuts = cutCuts();
@@ -315,6 +324,7 @@
 
     S.placements = scatter();
     S.view = 'pieces';
+    S.strokes = []; S.stroke = null;
     S.match = null; S.ms = 0;
     $('mCount').textContent = String(S.pieces.length);
     $('mTime').textContent = '—';
@@ -439,7 +449,7 @@
     if (S.view === 'source') {
       const vb = S.src.vb;
       board.setAttribute('viewBox', vb.minX + ' ' + vb.minY + ' ' + vb.w + ' ' + vb.h);
-      board.innerHTML = '<g>' + S.src.content + '</g>' + (S.stroke ? strokeMarkup() : '');
+      board.innerHTML = '<g>' + S.src.content + '</g>' + strokesMarkup();
       stage.style.aspectRatio = vb.w + ' / ' + vb.h;
       $('mSize').textContent = vb.w + ' × ' + vb.h;
       return;
@@ -454,17 +464,26 @@
     board.setAttribute('viewBox', n2(minX - pad) + ' ' + n2(minY - pad) + ' ' + n2(maxX - minX + pad * 2) + ' ' + n2(maxY - minY + pad * 2));
     let html = '';
     for (let i = 0; i < S.pieces.length; i++) html += pieceNode(S.pieces[i], pl[i].x, pl[i].y);
-    board.innerHTML = html + (S.stroke ? strokeMarkup() : '');
+    board.innerHTML = html + strokesMarkup();
     stage.style.aspectRatio = (maxX - minX + pad * 2) + ' / ' + (maxY - minY + pad * 2);
     $('mSize').textContent = n2(maxX - minX) + ' × ' + n2(maxY - minY);
   }
 
-  function strokeMarkup() {
-    if (!S.stroke || S.stroke.length < 2) return '';
+  function strokesMarkup() {
+    if (!S.src) return '';
     const sw = Math.max(S.src.vb.w, S.src.vb.h) * 0.006;
-    return '<polyline points="' + S.stroke.map((p) => n2(p[0]) + ',' + n2(p[1])).join(' ') +
-      '" fill="none" stroke="#5eead4" stroke-width="' + n2(sw) + '" stroke-linecap="round" stroke-dasharray="' +
-      n2(sw * 2.4) + ' ' + n2(sw * 1.6) + '"/>';
+    const lines = [];
+    (S.strokes || []).forEach((pts) => {
+      if (!pts || pts.length < 2) return;
+      lines.push('<polyline points="' + pts.map((p) => n2(p[0]) + ',' + n2(p[1])).join(' ') +
+        '" fill="none" stroke="#5eead4" stroke-width="' + n2(sw) + '" stroke-linecap="round" stroke-linejoin="round"/>');
+    });
+    if (S.stroke && S.stroke.length >= 2) {
+      lines.push('<polyline points="' + S.stroke.map((p) => n2(p[0]) + ',' + n2(p[1])).join(' ') +
+        '" fill="none" stroke="#a5b4fc" stroke-width="' + n2(sw) + '" stroke-linecap="round" stroke-dasharray="' +
+        n2(sw * 2.4) + ' ' + n2(sw * 1.6) + '"/>');
+    }
+    return lines.length ? '<g pointer-events="none">' + lines.join('') + '</g>' : '';
   }
 
   /* ---------------- 自由笔画线 ---------------- */
@@ -499,15 +518,25 @@
     const p = toUser(ev), last = S.stroke[S.stroke.length - 1];
     if (Math.hypot(p[0] - last[0], p[1] - last[1]) > S.src.vb.w * 0.004) { S.stroke.push(p); render(); }
   });
-  board.addEventListener('pointerup', () => {
+  board.addEventListener('pointerup', (ev) => {
     if (!drawing) return;
     drawing = false;
-    if (S.stroke && S.stroke.length > 2) {
-      S.stroke = snapStroke(S.stroke);   // 两端吸附到画布边，随手一划也能真正切开
-      setStatus('已画出一道切割线 → 自动切割', 0.35);
-      cut();                       // 松手直接切，不用再点按钮
+    const cur0 = S.stroke;
+    // 补上「松手那一点」：快速一划时 pointermove 可能只有一两个，不补就会丢最后一段
+    if (cur0 && cur0.length) {
+      const p = toUser(ev), last = cur0[cur0.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.5) cur0.push(p);
+    }
+    S.stroke = null;
+    if (cur0 && cur0.length >= 2) {
+      S.strokes.push(snapStroke(cur0));      // 累积多道：松手不立即切
+      if ($('chkAutoCut').checked) {
+        cut();
+      } else {
+        render();
+        setStatus('已画 ' + S.strokes.length + ' 道 · 可继续划，或点「② 切割」', 0.3);
+      }
     } else {
-      S.stroke = null;
       render();
     }
   });
@@ -539,6 +568,19 @@
   $('btnGen').addEventListener('click', generate);
   $('btnSeed').addEventListener('click', generate);
   $('btnCut').addEventListener('click', cut);
+  $('btnUndoStroke').addEventListener('click', () => {
+    if (!S.strokes.length) return toast('还没有笔画');
+    S.strokes.pop();
+    S.view = 'source';
+    render();
+    setStatus('撤销一道，剩 ' + S.strokes.length + ' 道', 0.3);
+  });
+  $('btnClearStroke').addEventListener('click', () => {
+    S.strokes = []; S.stroke = null;
+    S.view = 'source';
+    render();
+    setStatus('笔画已清空', 0.2);
+  });
   $('btnSolveNow').addEventListener('click', solvePuzzle);
   $('btnAll').addEventListener('click', runAll);
   $('btnExport').addEventListener('click', () => {
@@ -565,11 +607,12 @@
     if (!b) return;
     S.cutMode = b.dataset.cut;
     S.stroke = null;
+    S.strokes = [];
     // 切过之后视图在「碎片/拼好」上，自由笔必须先回到原图才能画
     if (S.cutMode === 'free' && S.src) { S.view = 'source'; S.stroke = null; }
     Array.prototype.forEach.call($('cutSeg').querySelectorAll('button'), (x) => x.classList.toggle('on', x === b));
     $('cutHint').textContent = S.cutMode === 'free'
-      ? '自由笔：在图上按住划一道，松手后点「② 切割」'
+      ? '自由笔：可连续划多道（每道都累积），划完点「② 切割」'
       : '网格切割：选好网格后点「② 切割」';
     board.classList.toggle('drawing', S.cutMode === 'free');
     render();
@@ -630,12 +673,16 @@
         bubbles: true, cancelable: true, pointerId: 7, isPrimary: true, button: 0, buttons: 1,
         clientX: rcs.left + rcs.width * fx, clientY: rcs.top + rcs.height * fy,
       }));
-      sendP('pointerdown', 0.05, 0.1);
-      sendP('pointermove', 0.45, 0.5);
-      sendP('pointermove', 0.95, 0.9);
-      sendP('pointerup', 0.95, 0.9);
-      check('自由笔：划一道松手即切', S.view === 'pieces' && S.pieces.length >= 2,
-        S.view + ' / ' + S.pieces.length + '块');
+      sendP('pointerdown', 0.04, 0.12);
+      sendP('pointermove', 0.5, 0.5);
+      sendP('pointerup', 0.96, 0.9);
+      sendP('pointerdown', 0.04, 0.9);
+      sendP('pointermove', 0.5, 0.45);
+      sendP('pointerup', 0.96, 0.08);
+      check('自由笔可连续画多道（不提前切）', S.view === 'source' && S.strokes.length === 2,
+        S.view + ' / ' + S.strokes.length + ' 道');
+      cut();
+      check('多道一次切出 ≥3 块', S.pieces.length >= 3, S.pieces.length + ' 块');
       $('cutSeg').querySelector('button[data-cut="free"]').click();
       check('切回自由笔自动回到原图', S.view === 'source', S.view);
 

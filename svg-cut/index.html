@@ -654,7 +654,12 @@
     renderOverlay(); renderList();
   });
 
-  function endDrag() {
+  function endDrag(ev) {
+    // 补上「松手那一点」：快速一划时 pointermove 可能很少，不补会丢最后一段（切不开）
+    if (drawing && drawing.live && ev && ev.clientX != null && src) {
+      var p = toUser(ev), last = drawing.pts[drawing.pts.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.5) drawing.pts.push(p);
+    }
     if (drawing && drawing.live) { finishStroke(); return; }
     drag = null;
   }
