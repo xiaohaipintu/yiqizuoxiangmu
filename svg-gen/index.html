@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>随机 SVG 生成器 · Random SVG Art</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #080b14;
+    --panel: #111726;
+    --panel-2: #18202f;
+    --line: #26324a;
+    --text: #e8eefc;
+    --muted: #8d9ab6;
+    --accent: #5eead4;
+    --accent-2: #a5b4fc;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100%;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1100px 700px at 12% -10%, #1b2a4a 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #2a1b45 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+  }
+
+  header {
+    padding: 26px 24px 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: clamp(1.25rem, 2.4vw, 1.7rem);
+    margin: 0;
+    letter-spacing: .02em;
+  }
+  h1 span {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header p { margin: 0; color: var(--muted); font-size: .85rem; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 336px;
+    gap: 20px;
+    padding: 16px 24px 34px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: minmax(0, 1fr); padding: 12px 14px 28px; }
+  }
+
+  .stage {
+    position: relative;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: #05070d;
+    padding: 14px;
+    box-shadow: 0 24px 60px -30px #000;
+  }
+  .stage-inner {
+    border-radius: 12px;
+    overflow: hidden;
+    background: #05070d;
+    line-height: 0;
+    min-height: 240px;
+    display: grid;
+    place-items: center;
+  }
+  .stage-inner svg { width: 100%; height: auto; display: block; border-radius: 10px; }
+
+  .badges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .badge {
+    font-size: .74rem;
+    letter-spacing: .04em;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    user-select: none;
+    transition: .18s;
+  }
+  .badge:hover { color: var(--text); border-color: #3b4a6b; }
+
+  .panel {
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: linear-gradient(180deg, #131a2b, #0e1421);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: sticky;
+    top: 16px;
+  }
+  @media (max-width: 900px) { .panel { position: static; } }
+
+  .row { display: flex; gap: 10px; }
+  .row > * { min-width: 0; }
+
+  button {
+    font: inherit;
+    font-size: .88rem;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: .16s;
+  }
+  button:hover { border-color: #47597f; background: #1d2739; }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  button.primary {
+    background: linear-gradient(135deg, #2dd4bf, #6366f1);
+    border-color: transparent;
+    color: #07121a;
+    font-weight: 650;
+    letter-spacing: .02em;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  button.wide { flex: 1; }
+
+  label.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: .74rem;
+    letter-spacing: .06em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  input[type="text"], select {
+    font: inherit;
+    font-size: .88rem;
+    color: var(--text);
+    background: #0c1220;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px 10px;
+    width: 100%;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  input[type="text"]:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: .84rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .switch input { width: 16px; height: 16px; accent-color: #2dd4bf; cursor: pointer; }
+
+  details.code-box {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #0a0f1b;
+    overflow: hidden;
+  }
+  details.code-box summary {
+    cursor: pointer;
+    padding: 10px 12px;
+    font-size: .8rem;
+    color: var(--muted);
+    letter-spacing: .04em;
+  }
+  details.code-box summary:hover { color: var(--text); }
+  details.code-box pre {
+    margin: 0;
+    padding: 0 12px 12px;
+    max-height: 260px;
+    overflow: auto;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: .72rem;
+    line-height: 1.5;
+    color: #9fb0d0;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .hint { font-size: .74rem; color: #61708f; line-height: 1.7; }
+  kbd {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: .72rem;
+    background: #1a2334;
+    border: 1px solid #2c3950;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 5px;
+    color: #b8c6e0;
+  }
+
+  #toast {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translate(-50%, 20px);
+    background: #101a2b;
+    border: 1px solid #2c3950;
+    color: var(--text);
+    font-size: .84rem;
+    padding: 9px 16px;
+    border-radius: 999px;
+    box-shadow: 0 12px 30px -12px #000;
+    opacity: 0;
+    pointer-events: none;
+    transition: .22s;
+    z-index: 20;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<header>
+  <h1>随机 <span>SVG</span> 图片生成器</h1>
+  <p>纯前端生成 · 可复现种子 · 一键导出 SVG / PNG</p>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="stage-inner" id="stage"></div>
+    <div class="badges">
+      <span class="badge" id="badgeStyle">—</span>
+      <span class="badge" id="badgeSeed" title="点击复制种子">种子 —</span>
+      <span class="badge" id="badgeSize">—</span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <button class="primary" id="btnNew">随机生成一张 &nbsp;<span style="opacity:.65">Space</span></button>
+
+    <div class="row">
+      <button class="wide" id="btnSvg">下载 SVG</button>
+      <button class="wide" id="btnPng">下载 PNG</button>
+    </div>
+    <div class="row">
+      <button class="wide" id="btnCopy">复制源码</button>
+    </div>
+
+    <label class="field">
+      风格
+      <select id="selStyle"></select>
+    </label>
+
+    <label class="field">
+      尺寸
+      <select id="selSize">
+        <option value="900x900">正方形 · 900 × 900</option>
+        <option value="1200x800">横版 · 1200 × 800</option>
+        <option value="800x1200">竖版 · 800 × 1200</option>
+        <option value="1080x1080">社交媒体 · 1080 × 1080</option>
+        <option value="1600x900">壁纸 · 1600 × 900</option>
+      </select>
+    </label>
+
+    <label class="field">
+      种子（同一 seed 永远生成同一张图）
+      <div class="row">
+        <input type="text" id="inpSeed" spellcheck="false" placeholder="留空随机" />
+        <button id="btnUseSeed" title="使用这个种子">用</button>
+      </div>
+    </label>
+
+    <label class="switch"><input type="checkbox" id="chkAuto" /> 自动轮播（每 2.5 秒换一张）</label>
+    <label class="switch"><input type="checkbox" id="chkGrain" checked /> 颗粒纹理</label>
+
+    <details class="code-box">
+      <summary>查看 / 展开 SVG 源码</summary>
+      <pre id="codeOut"></pre>
+    </details>
+
+    <div class="hint">
+      <kbd>Space</kbd> 新图 · <kbd>S</kbd> 存 SVG · <kbd>P</kbd> 存 PNG · <kbd>C</kbd> 复制源码<br />
+      带 <code>?seed=xxx&amp;style=xxx</code> 的链接可以直接分享同一张图。
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------- 基础工具 ---------------- */
+  const TAU = Math.PI * 2;
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const n1 = (v) => Math.round(v * 10) / 10;
+  const n2 = (v) => Math.round(v * 100) / 100;
+
+  const norm360 = (h) => ((h % 360) + 360) % 360;
+  function hsl(h, s, l, a) {
+    const H = Math.round(norm360(h));
+    const S = Math.round(clamp(s, 0, 100));
+    const L = Math.round(clamp(l, 0, 100));
+    if (a === undefined || a >= 1) return `hsl(${H},${S}%,${L}%)`;
+    return `hsla(${H},${S}%,${L}%,${n2(clamp(a, 0, 1))})`;
+  }
+
+  /* ---------------- 可复现随机数 ---------------- */
+  function hashStr(str) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+  function mulberry32(a) {
+    return function () {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function makeRand(seed) {
+    const next = mulberry32(hashStr(String(seed)));
+    const r = {
+      next,
+      float: (a = 0, b = 1) => a + (b - a) * next(),
+      int: (a, b) => Math.floor(a + (b - a + 1) * next()),
+      pick: (arr) => arr[Math.floor(next() * arr.length)],
+      bool: (p = 0.5) => next() < p,
+      sign: () => (next() < 0.5 ? -1 : 1),
+    };
+    return r;
+  }
+
+  /* ---------------- 配色 ---------------- */
+  const SCHEMES = [
+    [0, 24, 48, -24, -48],      // 邻近色
+    [0, 180, 20, 200, -160],    // 补色
+    [0, 120, 240, 60, 300],     // 三色
+    [0, 150, 210, 30, -30],     // 分裂补色
+    [0, 10, -10, 20, -20],      // 单色
+    [0, 40, 80, 320, 280],      // 宽邻近
+  ];
+
+  function makePalette(r) {
+    const baseHue = r.int(0, 359);
+    const offsets = r.pick(SCHEMES);
+    const satBase = r.float(58, 94);
+    const isDark = r.bool(0.72);
+
+    const colors = offsets.map((off) => {
+      const h = norm360(baseHue + off);
+      const s = clamp(satBase + r.float(-16, 6), 28, 98);
+      const l = isDark ? r.float(46, 76) : r.float(26, 56);
+      return { h, s, l };
+    });
+
+    const bgHue = norm360(baseHue + r.pick([0, 30, 180, 210, -150]));
+    const bg = isDark
+      ? hsl(bgHue, clamp(r.float(30, 60), 15, 70), r.float(6, 12))
+      : hsl(bgHue, r.float(28, 60), r.float(93, 97));
+    const bg2 = isDark
+      ? hsl(norm360(bgHue + r.float(20, 70) * r.sign()), r.float(28, 62), r.float(10, 20))
+      : hsl(norm360(bgHue + r.float(20, 70) * r.sign()), r.float(30, 62), r.float(84, 91));
+
+    return { baseHue, colors, isDark, bg, bg2 };
+  }
+
+  /* ---------------- 风格：每种返回 { defs, body } ---------------- */
+
+  // 1. 几何碎片（三角网格）
+  function shards(r, { W, H, pal }) {
+    const cols = r.int(4, 7);
+    const rows = Math.max(3, Math.round((cols * H) / W));
+    const cw = W / cols;
+    const ch = H / rows;
+    const pts = [];
+    for (let y = 0; y <= rows; y++) {
+      const row = [];
+      for (let x = 0; x <= cols; x++) {
+        const isEdge = x === 0 || x === cols;
+        const isTopBottom = y === 0 || y === rows;
+        const jx = isEdge ? 0 : r.float(-0.34, 0.34) * cw;
+        const jy = isTopBottom ? 0 : r.float(-0.34, 0.34) * ch;
+        row.push([x * cw + jx, y * ch + jy]);
+      }
+      pts.push(row);
+    }
+
+    let body = '';
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const a = pts[y][x], b = pts[y][x + 1], c = pts[y + 1][x], d = pts[y + 1][x + 1];
+        const tris = r.bool() ? [[a, b, d], [a, d, c]] : [[a, b, c], [b, d, c]];
+        for (const t of tris) {
+          const col = pal.colors[r.int(0, pal.colors.length - 1)];
+          const fill = hsl(col.h + r.float(-5, 5), col.s + r.float(-10, 6), clamp(col.l + r.float(-16, 12), 12, 90));
+          const p = t.map((pt) => `${n1(pt[0])},${n1(pt[1])}`).join(' ');
+          body += `<polygon points="${p}" fill="${fill}" stroke="${fill}" stroke-width="0.7"/>`;
+        }
+      }
+    }
+    return { body };
+  }
+
+  // 2. 层叠波浪
+  function waves(r, { W, H, pal }) {
+    const bands = r.int(5, 11);
+    const asLine = r.bool(0.35);
+    let body = '';
+
+    for (let i = 0; i < bands; i++) {
+      const t = (i + 0.5) / bands;
+      const y0 = H * t + r.float(-H * 0.02, H * 0.02);
+      const amp = H * r.float(0.02, 0.08);
+      const segs = r.int(2, 4);
+      const step = (W + 80) / segs;
+      let d = `M -40 ${n1(y0)}`;
+      for (let k = 0; k < segs; k++) {
+        const x1 = -40 + step * k;
+        const x2 = x1 + step;
+        const c1 = y0 + r.float(-amp, amp);
+        const c2 = y0 + r.float(-amp, amp);
+        const ey = y0 + r.float(-amp * 0.5, amp * 0.5);
+        d += ` C ${n1(x1 + step / 3)} ${n1(c1)}, ${n1(x1 + (step * 2) / 3)} ${n1(c2)}, ${n1(x2)} ${n1(ey)}`;
+      }
+      const col = pal.colors[i % pal.colors.length];
+      const h = col.h + r.float(-6, 6);
+      if (asLine) {
+        body += `<path d="${d}" fill="none" stroke="${hsl(h, col.s, clamp(col.l + r.float(-6, 8), 20, 88), 0.85)}" stroke-width="${n1(Math.min(W, H) * r.float(0.004, 0.018))}" stroke-linecap="round"/>`;
+      } else {
+        const lShift = pal.isDark ? (bands - i) * 1.6 : -(bands - i) * 1.6;
+        body += `<path d="${d} L ${W + 40} ${H + 40} L -40 ${H + 40} Z" fill="${hsl(h, col.s, clamp(col.l + lShift + r.float(-5, 5), 12, 92), 0.96)}"/>`;
+      }
+    }
+    return { body };
+  }
+
+  // 3. 点阵波纹
+  function dots(r, { W, H, pal }) {
+    const cols = r.int(10, 22);
+    const rows = Math.max(6, Math.round((cols * H) / W));
+    const cw = W / cols;
+    const ch = H / rows;
+
+    const terms = [];
+    const tn = r.int(2, 4);
+    for (let i = 0; i < tn; i++) {
+      terms.push({
+        fx: (r.float(0.6, 2.6) * TAU) / W,
+        fy: (r.float(0.6, 2.6) * TAU) / H,
+        ph: r.float(0, TAU),
+        w: r.float(0.5, 1),
+      });
+    }
+    const field = (x, y) => {
+      let v = 0, s = 0;
+      for (const t of terms) { v += Math.sin(x * t.fx + y * t.fy + t.ph) * t.w; s += t.w; }
+      return (v / s + 1) / 2;
+    };
+
+    const hueShift = r.bool(0.5);
+    let body = '';
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const cx = (x + 0.5) * cw;
+        const cy = (y + 0.5) * ch;
+        const v = field(cx, cy);
+        const rad = Math.min(cw, ch) * 0.5 * (0.1 + 0.86 * v);
+        if (rad < 0.45) continue;
+        const base = pal.colors[(x + y) % pal.colors.length];
+        const h = hueShift ? base.h + v * 40 - 20 : base.h;
+        body += `<circle cx="${n1(cx)}" cy="${n1(cy)}" r="${n2(rad)}" fill="${hsl(h, base.s, clamp(base.l + v * 10 - 5, 16, 88))}"/>`;
+      }
+    }
+    return { body };
+  }
+
+  // 4. 光斑散景
+  function bokeh(r, { W, H, pal }) {
+    const count = r.int(14, 30);
+    const minSide = Math.min(W, H);
+    const blur = n1(minSide * r.float(0.008, 0.028));
+    const defs = `<filter id="bk-blur" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="${blur}"/></filter>`;
+
+    let body = `<g filter="url(#bk-blur)" style="mix-blend-mode:${pal.isDark ? 'screen' : 'multiply'}">`;
+    for (let i = 0; i < count; i++) {
+      const col = pal.colors[i % pal.colors.length];
+      const rad = minSide * r.float(0.03, 0.22);
+      body += `<circle cx="${n1(r.float(-0.05, 1.05) * W)}" cy="${n1(r.float(-0.05, 1.05) * H)}" r="${n1(rad)}" fill="${hsl(col.h + r.float(-12, 12), clamp(col.s + r.float(-10, 8), 30, 100), clamp(col.l + r.float(-6, 14), 30, 86), r.float(0.28, 0.72))}"/>`;
+    }
+    body += '</g>';
+    return { defs, body };
+  }
+
+  // 5. 同心干涉
+  function rings(r, { W, H, pal }) {
+    const centers = [];
+    const cn = r.int(2, 4);
+    for (let i = 0; i < cn; i++) {
+      centers.push({
+        x: r.float(0.1, 0.9) * W,
+        y: r.float(0.1, 0.9) * H,
+        step: Math.min(W, H) * r.float(0.008, 0.024),
+        ph: r.float(0, 1),
+        w: r.float(0.6, 2.2),
+      });
+    }
+    const maxR = Math.hypot(W, H) * 1.05;
+    let body = '';
+    centers.forEach((c, ci) => {
+      const col = pal.colors[ci % pal.colors.length];
+      const alpha = r.float(0.35, 0.75);
+      body += '<g>';
+      for (let rad = c.step * (0.4 + c.ph); rad < maxR; rad += c.step) {
+        body += `<circle cx="${n1(c.x)}" cy="${n1(c.y)}" r="${n1(rad)}" fill="none" stroke="${hsl(col.h, col.s, clamp(col.l + r.float(-8, 8), 20, 88), alpha)}" stroke-width="${n2(c.w)}"/>`;
+      }
+      body += '</g>';
+    });
+    return { body };
+  }
+
+  // 6. 孟菲斯涂鸦
+  function memphis(r, { W, H, pal }) {
+    const minSide = Math.min(W, H);
+    const count = r.int(14, 26);
+    let body = '';
+    for (let i = 0; i < count; i++) {
+      const cx = r.float(0.02, 0.98) * W;
+      const cy = r.float(0.02, 0.98) * H;
+      const size = minSide * r.float(0.05, 0.17);
+      const col = pal.colors[i % pal.colors.length];
+      const fill = hsl(col.h + r.float(-4, 4), col.s, col.l, r.bool(0.75) ? 1 : 0.85);
+      const t = `transform="translate(${n1(cx)},${n1(cy)}) rotate(${Math.round(r.float(0, 360))})"`;
+      switch (r.int(0, 5)) {
+        case 0:
+          body += `<circle ${t} r="${n1(size / 2)}" fill="${fill}"/>`;
+          break;
+        case 1:
+          body += `<rect ${t} x="${n1(-size / 2)}" y="${n1(-size / 2)}" width="${n1(size)}" height="${n1(size)}" rx="${r.bool() ? n1(size / 2) : 0}" fill="${fill}"/>`;
+          break;
+        case 2:
+          body += `<polygon ${t} points="0,${n1(-size * 0.62)} ${n1(size * 0.56)},${n1(size * 0.46)} ${n1(-size * 0.56)},${n1(size * 0.46)}" fill="${fill}"/>`;
+          break;
+        case 3:
+          body += `<path ${t} d="M ${n1(-size / 2)} 0 Q 0 ${n1(-size * 0.72)} ${n1(size / 2)} 0" fill="none" stroke="${fill}" stroke-width="${n1(size * 0.15)}" stroke-linecap="round"/>`;
+          break;
+        case 4:
+          body += `<path ${t} d="M ${n1(-size / 2)} 0 H ${n1(size / 2)} M 0 ${n1(-size / 2)} V ${n1(size / 2)}" stroke="${fill}" stroke-width="${n1(size * 0.26)}" stroke-linecap="round"/>`;
+          break;
+        default:
+          body += `<path ${t} d="M ${n1(-size / 2)} 0 A ${n1(size / 2)} ${n1(size / 2)} 0 0 1 ${n1(size / 2)} 0 Z" fill="${fill}"/>`;
+      }
+    }
+    return { body };
+  }
+
+  // 7. 色块拼贴
+  function blocks(r, { W, H, pal }) {
+    const gap = Math.min(W, H) * r.float(0.006, 0.018);
+    const minSize = Math.min(W, H) * 0.15;
+    const rects = [];
+    const maxDepth = r.int(4, 7);
+
+    (function split(x, y, w, h, depth) {
+      const canSplit = depth > 0 && (w > minSize * 1.7 || h > minSize * 1.7) && r.bool(0.84);
+      if (!canSplit) { rects.push([x, y, w, h]); return; }
+      const horiz = Math.abs(w - h) > 1 ? w > h : r.bool();
+      const t = r.float(0.3, 0.7);
+      if (horiz) {
+        const cut = x + w * t;
+        split(x, y, w * t - gap / 2, h, depth - 1);
+        split(cut + gap / 2, y, w * (1 - t) - gap / 2, h, depth - 1);
+      } else {
+        const cut = y + h * t;
+        split(x, y, w, h * t - gap / 2, depth - 1);
+        split(x, cut + gap / 2, w, h * (1 - t) - gap / 2, depth - 1);
+      }
+    })(0, 0, W, H, maxDepth);
+
+    let body = '';
+    for (const [x, y, w, h] of rects) {
+      if (w <= 0.5 || h <= 0.5) continue;
+      if (r.bool(0.1)) continue;
+      const col = pal.colors[r.int(0, pal.colors.length - 1)];
+      body += `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(w)}" height="${n1(h)}" fill="${hsl(col.h + r.float(-4, 4), col.s, clamp(col.l + r.float(-12, 8), 14, 90))}"/>`;
+      if (r.bool(0.16)) {
+        const rr = Math.min(w, h) * r.float(0.12, 0.34);
+        const c2 = pal.colors[r.int(0, pal.colors.length - 1)];
+        body += `<circle cx="${n1(x + w / 2)}" cy="${n1(y + h / 2)}" r="${n1(rr)}" fill="${hsl(c2.h, c2.s, c2.l, 0.9)}"/>`;
+      }
+    }
+    return { body };
+  }
+
+  // 8. 极光渐变
+  function aurora(r, { W, H, pal }) {
+    const count = r.int(4, 8);
+    const blur = Math.min(W, H) * r.float(0.03, 0.075);
+    let defs = `<filter id="au-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${n1(blur)}"/></filter>`;
+    let body = '<g filter="url(#au-blur)">';
+
+    for (let i = 0; i < count; i++) {
+      const col = pal.colors[i % pal.colors.length];
+      const h = col.h + r.float(-14, 14);
+      const s = clamp(col.s + r.float(-8, 8), 40, 100);
+      const l = clamp(col.l + r.float(-4, 12), 38, 82);
+      const id = `au-g${i}`;
+      defs += `<radialGradient id="${id}"><stop offset="0%" stop-color="${hsl(h, s, l, 0.95)}"/><stop offset="55%" stop-color="${hsl(h, s, l, 0.4)}"/><stop offset="100%" stop-color="${hsl(h, s, l, 0)}"/></radialGradient>`;
+      const cx = r.float(0.05, 0.95) * W;
+      const cy = r.float(0.05, 0.95) * H;
+      const rx = W * r.float(0.18, 0.44);
+      const ry = H * r.float(0.18, 0.44);
+      body += `<ellipse cx="${n1(cx)}" cy="${n1(cy)}" rx="${n1(rx)}" ry="${n1(ry)}" fill="url(#${id})" transform="rotate(${n1(r.float(-45, 45))} ${n1(cx)} ${n1(cy)})"/>`;
+    }
+    body += '</g>';
+    return { defs, body };
+  }
+
+  // 9. 花瓣线
+  function petals(r, { W, H, pal }) {
+    const cx = W / 2;
+    const cy = H / 2;
+    const lobe = r.int(5, 16);
+    const ringsN = r.int(4, 11);
+    const maxR = Math.min(W, H) * 0.47;
+    const wob = r.float(0.06, 0.24);
+    const phase = r.float(0, TAU);
+    const asFill = r.bool(0.3);
+
+    let body = '';
+    for (let ring = ringsN; ring >= 1; ring--) {
+      const baseR = (maxR * ring) / ringsN;
+      const col = pal.colors[ring % pal.colors.length];
+      const steps = Math.max(lobe * 8, 96);
+      const pts = [];
+      for (let i = 0; i <= steps; i++) {
+        const th = (i / steps) * TAU;
+        const rr = baseR * (1 - wob / 2 + (wob / 2) * Math.cos(lobe * th + phase));
+        pts.push(`${n1(cx + Math.cos(th - Math.PI / 2) * rr)},${n1(cy + Math.sin(th - Math.PI / 2) * rr)}`);
+      }
+      const p = pts.join(' ');
+      if (asFill) {
+        body += `<polygon points="${p}" fill="${hsl(col.h, col.s, col.l, 0.16)}" stroke="${hsl(col.h, col.s, clamp(col.l + 8, 20, 92), 0.85)}" stroke-width="${n2(Math.min(W, H) * 0.0035)}"/>`;
+      } else {
+        body += `<polygon points="${p}" fill="none" stroke="${hsl(col.h, col.s, clamp(col.l + r.float(-4, 6), 20, 92), 0.9)}" stroke-width="${n2(Math.min(W, H) * r.float(0.002, 0.006))}"/>`;
+      }
+    }
+    // 中心点缀
+    const core = pal.colors[0];
+    body += `<circle cx="${n1(cx)}" cy="${n1(cy)}" r="${n1(maxR * 0.045)}" fill="${hsl(core.h, core.s, clamp(core.l + 16, 30, 95))}"/>`;
+    return { body };
+  }
+
+  // 10. 斜条纹
+  function stripes(r, { W, H, pal }) {
+    const angle = r.pick([0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, -30, -45]);
+    const count = r.int(7, 24);
+    const span = Math.hypot(W, H) * 1.25;
+    const weights = [];
+    let sum = 0;
+    for (let i = 0; i < count; i++) {
+      const w = r.float(0.55, 2.4);
+      weights.push(w);
+      sum += w;
+    }
+    const scale = span / sum;
+
+    let body = `<g transform="translate(${n1(W / 2)},${n1(H / 2)}) rotate(${angle})">`;
+    let x = -span / 2;
+    for (let i = 0; i < count; i++) {
+      const w = weights[i] * scale;
+      const col = pal.colors[i % pal.colors.length];
+      body += `<rect x="${n1(x)}" y="${n1(-span / 2)}" width="${n2(w)}" height="${n1(span)}" fill="${hsl(col.h + r.float(-5, 5), col.s, clamp(col.l + r.float(-10, 8), 12, 90))}"/>`;
+      x += w;
+    }
+    body += '</g>';
+    return { body };
+  }
+
+  const STYLES = {
+    shards: { name: '几何碎片', draw: shards },
+    waves: { name: '层叠波浪', draw: waves },
+    dots: { name: '点阵波纹', draw: dots },
+    bokeh: { name: '光斑散景', draw: bokeh },
+    rings: { name: '同心干涉', draw: rings },
+    memphis: { name: '孟菲斯涂鸦', draw: memphis },
+    blocks: { name: '色块拼贴', draw: blocks },
+    aurora: { name: '极光渐变', draw: aurora },
+    petals: { name: '花瓣线', draw: petals },
+    stripes: { name: '斜条纹', draw: stripes },
+  };
+  const STYLE_KEYS = Object.keys(STYLES);
+
+  /* ---------------- 组装整张 SVG ---------------- */
+  function buildArt({ seed, style = 'random', size = [900, 900], grain = true }) {
+    const r = makeRand(seed);
+    const [W, H] = size;
+    const pal = makePalette(r);
+    let styleId = style && style !== 'random' && STYLES[style] ? style : r.pick(STYLE_KEYS);
+    const res = STYLES[styleId].draw(r, { W, H, pal }) || {};
+
+    const parts = [];
+    parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="随机生成的 SVG 图像">`);
+    parts.push('<defs>');
+    parts.push(`<linearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${pal.bg}"/><stop offset="100%" stop-color="${pal.bg2}"/></linearGradient>`);
+    if (grain) {
+      parts.push('<filter id="grain-filter" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>');
+    }
+    parts.push(res.defs || '');
+    parts.push('</defs>');
+    parts.push(`<rect width="${W}" height="${H}" fill="url(#bg-grad)"/>`);
+    parts.push(res.body || '');
+    if (grain) {
+      parts.push(`<rect width="${W}" height="${H}" filter="url(#grain-filter)" opacity="${pal.isDark ? '0.16' : '0.1'}" style="mix-blend-mode:${pal.isDark ? 'overlay' : 'multiply'}"/>`);
+    }
+    parts.push('</svg>');
+
+    return { svg: parts.join('\n'), styleId, seed, W, H };
+  }
+
+  /* ---------------- 页面逻辑 ---------------- */
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage');
+  const badgeStyle = $('badgeStyle');
+  const badgeSeed = $('badgeSeed');
+  const badgeSize = $('badgeSize');
+  const codeOut = $('codeOut');
+  const toastEl = $('toast');
+
+  const state = {
+    seed: '',
+    style: 'random',
+    size: '900x900',
+    grain: true,
+    autoTimer: null,
+  };
+  let current = null;
+
+  const randomSeed = () => Math.random().toString(36).slice(2, 9);
+
+  let toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1600);
+  }
+
+  function parseSize(str) {
+    const m = /^(\d+)x(\d+)$/.exec(String(str || ''));
+    if (!m) return [900, 900];
+    return [clamp(parseInt(m[1], 10), 64, 4096), clamp(parseInt(m[2], 10), 64, 4096)];
+  }
+
+  function syncUrl() {
+    try {
+      const q = new URLSearchParams({
+        seed: current.seed,
+        style: current.styleId,
+        size: `${current.W}x${current.H}`,
+      });
+      history.replaceState(null, '', `${location.pathname}?${q.toString()}`);
+    } catch (e) { /* file:// 下浏览器可能拒绝 replaceState，忽略即可 */ }
+  }
+
+  function render() {
+    if (!state.seed) state.seed = randomSeed();
+    current = buildArt({
+      seed: state.seed,
+      style: state.style,
+      size: parseSize(state.size),
+      grain: state.grain,
+    });
+    stage.innerHTML = current.svg;
+    badgeStyle.textContent = STYLES[current.styleId].name;
+    badgeSeed.textContent = `种子 ${current.seed}`;
+    badgeSize.textContent = `${current.W} × ${current.H}`;
+    $('inpSeed').value = current.seed;
+    codeOut.textContent = current.svg;
+    syncUrl();
+  }
+
+  function regenerate() {
+    state.seed = randomSeed();
+    render();
+  }
+
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function downloadSvg() {
+    if (!current) return;
+    saveBlob(new Blob([current.svg], { type: 'image/svg+xml;charset=utf-8' }), `svg-art-${current.seed}.svg`);
+    toast('已导出 SVG');
+  }
+
+  function downloadPng() {
+    if (!current) return;
+    const scale = 2;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = current.W * scale;
+      canvas.height = current.H * scale;
+      const g = canvas.getContext('2d');
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) { toast('PNG 导出失败'); return; }
+        saveBlob(blob, `svg-art-${current.seed}.png`);
+        toast(`已导出 PNG（${canvas.width} × ${canvas.height}）`);
+      }, 'image/png');
+    };
+    img.onerror = () => toast('PNG 导出失败');
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(current.svg)}`;
+  }
+
+  async function copySvg() {
+    if (!current) return;
+    try {
+      await navigator.clipboard.writeText(current.svg);
+      toast('源码已复制');
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = current.svg;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); toast('源码已复制'); } catch (err) { toast('复制失败，请手动选择'); }
+      ta.remove();
+    }
+  }
+
+  function setAuto(on) {
+    clearInterval(state.autoTimer);
+    state.autoTimer = null;
+    if (on) state.autoTimer = setInterval(regenerate, 2500);
+  }
+
+  /* ---------------- 初始化 ---------------- */
+  const selStyle = $('selStyle');
+  selStyle.innerHTML = '<option value="random">随机（全部风格混合）</option>' +
+    STYLE_KEYS.map((k) => `<option value="${k}">${STYLES[k].name}</option>`).join('');
+
+  const selSize = $('selSize');
+
+  $('btnNew').addEventListener('click', regenerate);
+  $('btnSvg').addEventListener('click', downloadSvg);
+  $('btnPng').addEventListener('click', downloadPng);
+  $('btnCopy').addEventListener('click', copySvg);
+
+  selStyle.addEventListener('change', () => {
+    state.style = selStyle.value;
+    render();
+  });
+
+  selSize.addEventListener('change', () => {
+    state.size = selSize.value;
+    render();
+  });
+
+  $('btnUseSeed').addEventListener('click', () => {
+    const val = $('inpSeed').value.trim();
+    if (!val) { regenerate(); return; }
+    state.seed = val;
+    render();
+    toast(`已使用种子 ${val}`);
+  });
+
+  $('inpSeed').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('btnUseSeed').click(); }
+  });
+
+  $('chkAuto').addEventListener('change', (e) => {
+    setAuto(e.target.checked);
+    toast(e.target.checked ? '已开启自动轮播' : '已停止自动轮播');
+  });
+
+  $('chkGrain').addEventListener('change', (e) => {
+    state.grain = e.target.checked;
+    render();
+  });
+
+  badgeSeed.addEventListener('click', () => {
+    if (!current) return;
+    navigator.clipboard.writeText(current.seed)
+      .then(() => toast(`种子已复制：${current.seed}`))
+      .catch(() => toast(`种子：${current.seed}`));
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ' || k === 'spacebar') { e.preventDefault(); regenerate(); }
+    else if (k === 's') { e.preventDefault(); downloadSvg(); }
+    else if (k === 'p') { e.preventDefault(); downloadPng(); }
+    else if (k === 'c') { e.preventDefault(); copySvg(); }
+  });
+
+  // 从 URL 恢复状态
+  (function initFromUrl() {
+    const params = new URLSearchParams(location.search);
+    const style = params.get('style');
+    const size = params.get('size');
+    const seed = params.get('seed');
+
+    if (style && (style === 'random' || STYLES[style])) {
+      state.style = style;
+      selStyle.value = style;
+    }
+    if (size && /^\d+x\d+$/.test(size)) {
+      state.size = size;
+      if ([...selSize.options].some((o) => o.value === size)) selSize.value = size;
+      else {
+        const [w, h] = parseSize(size);
+        selSize.add(new Option(`${w} × ${h}`, size));
+        selSize.value = size;
+      }
+    }
+    state.seed = seed || randomSeed();
+  })();
+
+  render();
+})();
+</script>
+</body>
+</html>
