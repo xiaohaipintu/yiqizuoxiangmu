@@ -38,9 +38,9 @@
       linear-gradient(45deg, #0e1421 25%, transparent 25%, transparent 75%, #0e1421 75%) 0 0 / 18px 18px,
       linear-gradient(45deg, #0e1421 25%, #0a0e18 25%, #0a0e18 75%, #0e1421 75%) 9px 9px / 18px 18px;
   }
-  #board { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #board { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; z-index: 2; }
   #board.drawing { cursor: crosshair; }
-  .empty-tip { text-align: center; color: var(--muted); font-size: .86rem; padding: 70px 24px; line-height: 1.9; }
+  .empty-tip { text-align: center; color: var(--muted); font-size: .86rem; padding: 70px 24px; line-height: 1.9; pointer-events: none; }
   .empty-tip b { color: var(--accent); }
 
   .meta { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 14px 12px; color: var(--muted); font-size: .78rem; }
@@ -246,6 +246,26 @@
     }).join(' ');
   }
 
+  /* 自由笔画线：两端靠近边缘就吸附到边上（否则随手一划不贯穿画面，切不开） */
+  function snapStroke(pts) {
+    if (!pts || pts.length < 2) return pts;
+    const vb = S.src.vb, snap = Math.max(vb.w, vb.h) * 0.06;
+    const one = (p) => {
+      const dl = p[0] - vb.minX, dr = vb.minX + vb.w - p[0];
+      const dt = p[1] - vb.minY, db = vb.minY + vb.h - p[1];
+      const m = Math.min(dl, dr, dt, db);
+      if (m > snap) return p;
+      if (m === dl) return [vb.minX, p[1]];
+      if (m === dr) return [vb.minX + vb.w, p[1]];
+      if (m === dt) return [p[0], vb.minY];
+      return [p[0], vb.minY + vb.h];
+    };
+    const out = pts.slice();
+    out[0] = one(out[0]);
+    out[out.length - 1] = one(out[out.length - 1]);
+    return out;
+  }
+
   function cutCuts() {
     const vb = S.src.vb;
     if (S.cutMode === 'free') {
@@ -261,12 +281,18 @@
 
   function cut() {
     if (!S.src) return toast('先点「重新生成」');
+    // 自由笔模式下还没画线：先回到原图视图，方便直接划
+    if (S.cutMode === 'free' && !(S.stroke && S.stroke.length > 1)) {
+      if (S.view !== 'source') { S.view = 'source'; render(); }
+      return toast('在原图上按住划一道，松手即切');
+    }
     const vb = S.src.vb;
     const cuts = cutCuts();
     if (!cuts) return toast('自由笔：先在图上按住划一道');
 
     const raw = CutEngine.computePieces({ width: vb.w, height: vb.h, cuts, res: 1100 });
     if (!raw.length) return toast('没切出碎片');
+    if (raw.length < 2) return toast('这条线没把画面切开：两端要落在或靠近画布边缘');
     if (raw.length > 40) return toast('切出 ' + raw.length + ' 块，太多了（≤40）');
 
     // ---- 关键：每块只保留自己的局部几何，原位置清零 ----
@@ -477,9 +503,13 @@
     if (!drawing) return;
     drawing = false;
     if (S.stroke && S.stroke.length > 2) {
-      setStatus('已画出一条切割线 · 点「② 切割」', 0.3);
-    } else { S.stroke = null; }
-    render();
+      S.stroke = snapStroke(S.stroke);   // 两端吸附到画布边，随手一划也能真正切开
+      setStatus('已画出一道切割线 → 自动切割', 0.35);
+      cut();                       // 松手直接切，不用再点按钮
+    } else {
+      S.stroke = null;
+      render();
+    }
   });
 
   /* ---------------- 一键全程 ---------------- */
@@ -535,6 +565,8 @@
     if (!b) return;
     S.cutMode = b.dataset.cut;
     S.stroke = null;
+    // 切过之后视图在「碎片/拼好」上，自由笔必须先回到原图才能画
+    if (S.cutMode === 'free' && S.src) { S.view = 'source'; S.stroke = null; }
     Array.prototype.forEach.call($('cutSeg').querySelectorAll('button'), (x) => x.classList.toggle('on', x === b));
     $('cutHint').textContent = S.cutMode === 'free'
       ? '自由笔：在图上按住划一道，松手后点「② 切割」'
@@ -591,6 +623,21 @@
         Math.abs(midP[1] - (vb0.minY + vb0.h / 2)) < vb0.h * 0.02;
       check('画布缩放后坐标映射正确', !!nearMid, midP ? midP.map(n2).join(',') : '-');
       drawing = false; S.stroke = null; render();
+
+      // 自由笔整条链路：划一道 → 松手自动切
+      const rcs = board.getBoundingClientRect();
+      const sendP = (type, fx, fy) => board.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 7, isPrimary: true, button: 0, buttons: 1,
+        clientX: rcs.left + rcs.width * fx, clientY: rcs.top + rcs.height * fy,
+      }));
+      sendP('pointerdown', 0.05, 0.1);
+      sendP('pointermove', 0.45, 0.5);
+      sendP('pointermove', 0.95, 0.9);
+      sendP('pointerup', 0.95, 0.9);
+      check('自由笔：划一道松手即切', S.view === 'pieces' && S.pieces.length >= 2,
+        S.view + ' / ' + S.pieces.length + '块');
+      $('cutSeg').querySelector('button[data-cut="free"]').click();
+      check('切回自由笔自动回到原图', S.view === 'source', S.view);
 
       // ② 3×3
       S.cutMode = '3x3';
