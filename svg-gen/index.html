@@ -236,7 +236,7 @@
 <body>
 <header>
   <h1>随机 <span>SVG</span> 图片生成器</h1>
-  <p>纯前端生成 · 可复现种子 · 一键导出 SVG / PNG · 想按线切开？用 <a href="../svg-cut/index.html" style="color:#5eead4;text-decoration:none;border-bottom:1px dotted currentColor">SVG 线切割工具</a></p>
+  <p>纯前端生成 · 可复现种子 · 一键导出 SVG / PNG · 元素密集、无大面积纯色（细线网 + 颗粒 + 碎点叠加）· 想按线切开？用 <a href="../svg-cut/index.html" style="color:#5eead4;text-decoration:none;border-bottom:1px dotted currentColor">SVG 线切割工具</a></p>
 </header>
 
 <main>
@@ -285,7 +285,7 @@
     </label>
 
     <label class="switch"><input type="checkbox" id="chkAuto" /> 自动轮播（每 2.5 秒换一张）</label>
-    <label class="switch"><input type="checkbox" id="chkGrain" checked /> 颗粒纹理</label>
+    <label class="switch"><input type="checkbox" id="chkGrain" checked /> 纹理叠加（细线网 + 颗粒 + 碎点）</label>
 
     <details class="code-box">
       <summary>查看 / 展开 SVG 源码</summary>
@@ -388,9 +388,9 @@
   /* ---------------- 风格：每种返回 { defs, body } ---------------- */
 
   // 1. 几何碎片（三角网格）
-  function shards(r, { W, H, pal }) {
-    const cols = r.int(4, 7);
-    const rows = Math.max(3, Math.round((cols * H) / W));
+  function shards(r, { W, H, pal, cg }) {
+    const cols = r.int(6, 11);
+    const rows = Math.max(4, Math.round((cols * H) / W));
     const cw = W / cols;
     const ch = H / rows;
     const pts = [];
@@ -413,7 +413,9 @@
         const tris = r.bool() ? [[a, b, d], [a, d, c]] : [[a, b, c], [b, d, c]];
         for (const t of tris) {
           const col = pal.colors[r.int(0, pal.colors.length - 1)];
-          const fill = hsl(col.h + r.float(-5, 5), col.s + r.float(-10, 6), clamp(col.l + r.float(-16, 12), 12, 90));
+          const fill = cg && r.bool(0.5)
+            ? cg[r.int(0, cg.length - 1)]
+            : hsl(col.h + r.float(-5, 5), col.s + r.float(-10, 6), clamp(col.l + r.float(-16, 12), 12, 90));
           const p = t.map((pt) => `${n1(pt[0])},${n1(pt[1])}`).join(' ');
           body += `<polygon points="${p}" fill="${fill}" stroke="${fill}" stroke-width="0.7"/>`;
         }
@@ -423,9 +425,9 @@
   }
 
   // 2. 层叠波浪
-  function waves(r, { W, H, pal }) {
-    const bands = r.int(5, 11);
-    const asLine = r.bool(0.35);
+  function waves(r, { W, H, pal, cg }) {
+    const bands = r.int(9, 18);
+    const asLine = r.bool(0.45);
     let body = '';
 
     for (let i = 0; i < bands; i++) {
@@ -449,7 +451,7 @@
         body += `<path d="${d}" fill="none" stroke="${hsl(h, col.s, clamp(col.l + r.float(-6, 8), 20, 88), 0.85)}" stroke-width="${n1(Math.min(W, H) * r.float(0.004, 0.018))}" stroke-linecap="round"/>`;
       } else {
         const lShift = pal.isDark ? (bands - i) * 1.6 : -(bands - i) * 1.6;
-        body += `<path d="${d} L ${W + 40} ${H + 40} L -40 ${H + 40} Z" fill="${hsl(h, col.s, clamp(col.l + lShift + r.float(-5, 5), 12, 92), 0.96)}"/>`;
+        body += `<path d="${d} L ${W + 40} ${H + 40} L -40 ${H + 40} Z" fill="${cg && cg.length ? cg[i % cg.length] : hsl(h, col.s, clamp(col.l + lShift + r.float(-5, 5), 12, 92), 0.96)}" fill-opacity="0.95"/>`;
       }
     }
     return { body };
@@ -457,8 +459,8 @@
 
   // 3. 点阵波纹
   function dots(r, { W, H, pal }) {
-    const cols = r.int(10, 22);
-    const rows = Math.max(6, Math.round((cols * H) / W));
+    const cols = r.int(14, 30);
+    const rows = Math.max(8, Math.round((cols * H) / W));
     const cw = W / cols;
     const ch = H / rows;
 
@@ -497,7 +499,7 @@
 
   // 4. 光斑散景
   function bokeh(r, { W, H, pal }) {
-    const count = r.int(14, 30);
+    const count = r.int(24, 48);
     const minSide = Math.min(W, H);
     const blur = n1(minSide * r.float(0.008, 0.028));
     const defs = `<filter id="bk-blur" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="${blur}"/></filter>`;
@@ -515,12 +517,12 @@
   // 5. 同心干涉
   function rings(r, { W, H, pal }) {
     const centers = [];
-    const cn = r.int(2, 4);
+    const cn = r.int(3, 5);
     for (let i = 0; i < cn; i++) {
       centers.push({
         x: r.float(0.1, 0.9) * W,
         y: r.float(0.1, 0.9) * H,
-        step: Math.min(W, H) * r.float(0.008, 0.024),
+        step: Math.min(W, H) * r.float(0.005, 0.015),
         ph: r.float(0, 1),
         w: r.float(0.6, 2.2),
       });
@@ -542,12 +544,12 @@
   // 6. 孟菲斯涂鸦
   function memphis(r, { W, H, pal }) {
     const minSide = Math.min(W, H);
-    const count = r.int(14, 26);
+    const count = r.int(34, 64);
     let body = '';
     for (let i = 0; i < count; i++) {
       const cx = r.float(0.02, 0.98) * W;
       const cy = r.float(0.02, 0.98) * H;
-      const size = minSide * r.float(0.05, 0.17);
+      const size = minSide * r.float(0.022, 0.095);
       const col = pal.colors[i % pal.colors.length];
       const fill = hsl(col.h + r.float(-4, 4), col.s, col.l, r.bool(0.75) ? 1 : 0.85);
       const t = `transform="translate(${n1(cx)},${n1(cy)}) rotate(${Math.round(r.float(0, 360))})"`;
@@ -575,11 +577,11 @@
   }
 
   // 7. 色块拼贴
-  function blocks(r, { W, H, pal }) {
-    const gap = Math.min(W, H) * r.float(0.006, 0.018);
-    const minSize = Math.min(W, H) * 0.15;
+  function blocks(r, { W, H, pal, cg }) {
+    const gap = Math.min(W, H) * r.float(0.004, 0.012);
+    const minSize = Math.min(W, H) * 0.07;
     const rects = [];
-    const maxDepth = r.int(4, 7);
+    const maxDepth = r.int(6, 9);
 
     (function split(x, y, w, h, depth) {
       const canSplit = depth > 0 && (w > minSize * 1.7 || h > minSize * 1.7) && r.bool(0.84);
@@ -602,7 +604,8 @@
       if (w <= 0.5 || h <= 0.5) continue;
       if (r.bool(0.1)) continue;
       const col = pal.colors[r.int(0, pal.colors.length - 1)];
-      body += `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(w)}" height="${n1(h)}" fill="${hsl(col.h + r.float(-4, 4), col.s, clamp(col.l + r.float(-12, 8), 14, 90))}"/>`;
+      const bf = cg && cg.length ? cg[r.int(0, cg.length - 1)] : hsl(col.h + r.float(-4, 4), col.s, clamp(col.l + r.float(-12, 8), 14, 90));
+      body += `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(w)}" height="${n1(h)}" fill="${bf}"/>`;
       if (r.bool(0.16)) {
         const rr = Math.min(w, h) * r.float(0.12, 0.34);
         const c2 = pal.colors[r.int(0, pal.colors.length - 1)];
@@ -614,7 +617,7 @@
 
   // 8. 极光渐变
   function aurora(r, { W, H, pal }) {
-    const count = r.int(4, 8);
+    const count = r.int(8, 16);
     const blur = Math.min(W, H) * r.float(0.03, 0.075);
     let defs = `<filter id="au-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${n1(blur)}"/></filter>`;
     let body = '<g filter="url(#au-blur)">';
@@ -640,8 +643,8 @@
   function petals(r, { W, H, pal }) {
     const cx = W / 2;
     const cy = H / 2;
-    const lobe = r.int(5, 16);
-    const ringsN = r.int(4, 11);
+    const lobe = r.int(6, 22);
+    const ringsN = r.int(9, 20);
     const maxR = Math.min(W, H) * 0.47;
     const wob = r.float(0.06, 0.24);
     const phase = r.float(0, TAU);
@@ -672,14 +675,14 @@
   }
 
   // 10. 斜条纹
-  function stripes(r, { W, H, pal }) {
+  function stripes(r, { W, H, pal, cg }) {
     const angle = r.pick([0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, -30, -45]);
-    const count = r.int(7, 24);
+    const count = r.int(16, 46);
     const span = Math.hypot(W, H) * 1.25;
     const weights = [];
     let sum = 0;
     for (let i = 0; i < count; i++) {
-      const w = r.float(0.55, 2.4);
+      const w = r.float(0.35, 1.8);
       weights.push(w);
       sum += w;
     }
@@ -690,11 +693,75 @@
     for (let i = 0; i < count; i++) {
       const w = weights[i] * scale;
       const col = pal.colors[i % pal.colors.length];
-      body += `<rect x="${n1(x)}" y="${n1(-span / 2)}" width="${n2(w)}" height="${n1(span)}" fill="${hsl(col.h + r.float(-5, 5), col.s, clamp(col.l + r.float(-10, 8), 12, 90))}"/>`;
+      body += `<rect x="${n1(x)}" y="${n1(-span / 2)}" width="${n2(w)}" height="${n1(span)}" fill="${cg && cg.length ? cg[i % cg.length] : hsl(col.h + r.float(-5, 5), col.s, clamp(col.l + r.float(-10, 8), 12, 90))}"/>`;
       x += w;
     }
     body += '</g>';
     return { body };
+  }
+
+  /* ---------------- 调色板 → 渐变色（大面积填充不再用纯色） ---------------- */
+  function makeColorGradients(r, pal) {
+    const defs = [];
+    const fills = [];
+    pal.colors.forEach((c, i) => {
+      const d = r.pick([[1, 0.15], [0.15, 1], [1, 1], [-1, 1], [0.7, -1], [1, -0.6]]);
+      const h1 = norm360(c.h + r.float(-32, 32));
+      const h2 = norm360(c.h - r.float(8, 34));
+      const l1 = clamp(c.l + r.float(12, 26), 12, 97);
+      const l2 = clamp(c.l - r.float(6, 22), 8, 92);
+      defs.push(`<linearGradient id="cg${i}" x1="0" y1="0" x2="${n2(d[0])}" y2="${n2(d[1])}">` +
+        `<stop offset="0%" stop-color="${hsl(h1, clamp(c.s - 6, 20, 100), l1)}"/>` +
+        `<stop offset="48%" stop-color="${hsl(c.h, c.s, c.l)}"/>` +
+        `<stop offset="100%" stop-color="${hsl(h2, clamp(c.s + 8, 20, 100), l2)}"/></linearGradient>`);
+      fills.push(`url(#cg${i})`);
+    });
+    return { defs: defs.join(''), fills };
+  }
+
+  /* ---------------- 质感叠加层：细网线 + 颗粒 + 成千碎点（保证没有大面积连续纯色） ---------------- */
+  function richness(r, W, H, pal) {
+    const minSide = Math.min(W, H);
+    const ink = pal.isDark ? '#ffffff' : '#0b0f18';
+    const defs = [];
+    const body = [];
+
+    // 1) 细密斜线
+    const step1 = clamp(minSide * r.float(0.006, 0.013), 2.5, 22);
+    defs.push(`<pattern id="tx-hatch" width="${n2(step1)}" height="${n2(step1)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${n1(r.float(0, 180))})">` +
+      `<line x1="0" y1="0" x2="0" y2="${n2(step1)}" stroke="${ink}" stroke-opacity="${r.float(0.07, 0.17).toFixed(2)}" stroke-width="${n2(step1 * 0.3)}"/></pattern>`);
+
+    // 2) 正交细网格
+    const step2 = clamp(minSide * r.float(0.016, 0.042), 11, 74);
+    defs.push(`<pattern id="tx-grid" width="${n2(step2)}" height="${n2(step2)}" patternUnits="userSpaceOnUse">` +
+      `<path d="M 0 0 H ${n2(step2)} M 0 0 V ${n2(step2)}" fill="none" stroke="${ink}" stroke-opacity="${r.float(0.05, 0.11).toFixed(2)}" stroke-width="${n2(Math.max(0.4, step2 * 0.045))}"/></pattern>`);
+
+    // 3) 颗粒噪声
+    defs.push(`<filter id="tx-grain" x="0" y="0" width="100%" height="100%">` +
+      `<feTurbulence type="fractalNoise" baseFrequency="${r.float(0.55, 1.05).toFixed(2)}" numOctaves="3" stitchTiles="stitch"/>` +
+      `<feColorMatrix type="saturate" values="0"/></filter>`);
+
+    body.push(`<rect width="${n2(W)}" height="${n2(H)}" fill="url(#tx-hatch)" style="mix-blend-mode:${pal.isDark ? 'overlay' : 'multiply'}"/>`);
+    body.push(`<rect width="${n2(W)}" height="${n2(H)}" fill="url(#tx-grid)" style="mix-blend-mode:${pal.isDark ? 'screen' : 'multiply'}"/>`);
+    body.push(`<rect width="${n2(W)}" height="${n2(H)}" filter="url(#tx-grain)" opacity="${pal.isDark ? '0.22' : '0.16'}" style="mix-blend-mode:overlay"/>`);
+
+    // 4) 碎点 / 短线 / 小弧：把空白处也铺满元素
+    const n = r.int(140, 300);
+    const spk = [];
+    for (let i = 0; i < n; i++) {
+      const x = r.float(-0.01, 1.01) * W;
+      const y = r.float(-0.01, 1.01) * H;
+      const col = pal.colors[r.int(0, pal.colors.length - 1)];
+      const s = minSide * r.float(0.0015, 0.007);
+      const c = hsl(col.h + r.float(-12, 12), col.s, clamp(col.l + r.float(-18, 18), 14, 92), r.float(0.18, 0.62));
+      const kind = r.int(0, 2);
+      if (kind === 0) spk.push(`<circle cx="${n1(x)}" cy="${n1(y)}" r="${n2(s)}" fill="${c}"/>`);
+      else if (kind === 1) spk.push(`<rect x="${n1(x)}" y="${n1(y)}" width="${n2(s * 2.6)}" height="${n2(s * 0.9)}" fill="${c}" transform="rotate(${Math.round(r.float(0, 180))} ${n1(x)} ${n1(y)})"/>`);
+      else spk.push(`<path d="M ${n1(x)} ${n1(y)} q ${n1(s * 4)} ${n1(-s * 3)} ${n1(s * 8)} 0" fill="none" stroke="${c}" stroke-width="${n2(Math.max(0.35, s * 0.7))}" stroke-linecap="round"/>`);
+    }
+    body.push(`<g>${spk.join('')}</g>`);
+
+    return { defs: defs.join(''), body: body.join('') };
   }
 
   const STYLES = {
@@ -716,23 +783,30 @@
     const r = makeRand(seed);
     const [W, H] = size;
     const pal = makePalette(r);
+    const cg = makeColorGradients(r, pal);
     let styleId = style && style !== 'random' && STYLES[style] ? style : r.pick(STYLE_KEYS);
-    const res = STYLES[styleId].draw(r, { W, H, pal }) || {};
+    const res = STYLES[styleId].draw(r, { W, H, pal, cg: cg.fills }) || {};
+    const tx = grain ? richness(r, W, H, pal) : { defs: '', body: '' };
 
     const parts = [];
     parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="随机生成的 SVG 图像">`);
     parts.push('<defs>');
-    parts.push(`<linearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${pal.bg}"/><stop offset="100%" stop-color="${pal.bg2}"/></linearGradient>`);
-    if (grain) {
-      parts.push('<filter id="grain-filter" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>');
-    }
+    // 背景本身也是多段渐变 + 暗角，绝不平涂
+    parts.push(`<linearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="1">` +
+      `<stop offset="0%" stop-color="${pal.bg}"/>` +
+      `<stop offset="55%" stop-color="${pal.bg2}"/>` +
+      `<stop offset="100%" stop-color="${pal.bg}"/></linearGradient>`);
+    parts.push(`<radialGradient id="bg-vig" cx="0.5" cy="0.45" r="0.75">` +
+      `<stop offset="55%" stop-color="#000" stop-opacity="0"/>` +
+      `<stop offset="100%" stop-color="#000" stop-opacity="${pal.isDark ? 0.42 : 0.18}"/></radialGradient>`);
+    parts.push(cg.defs);
     parts.push(res.defs || '');
+    parts.push(tx.defs || '');
     parts.push('</defs>');
     parts.push(`<rect width="${W}" height="${H}" fill="url(#bg-grad)"/>`);
     parts.push(res.body || '');
-    if (grain) {
-      parts.push(`<rect width="${W}" height="${H}" filter="url(#grain-filter)" opacity="${pal.isDark ? '0.16' : '0.1'}" style="mix-blend-mode:${pal.isDark ? 'overlay' : 'multiply'}"/>`);
-    }
+    parts.push(`<rect width="${W}" height="${H}" fill="url(#bg-vig)"/>`);
+    parts.push(tx.body || '');
     parts.push('</svg>');
 
     return { svg: parts.join('\n'), styleId, seed, W, H };
