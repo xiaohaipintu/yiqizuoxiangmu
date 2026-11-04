@@ -38,7 +38,7 @@
       linear-gradient(45deg, #0e1421 25%, transparent 25%, transparent 75%, #0e1421 75%) 0 0 / 18px 18px,
       linear-gradient(45deg, #0e1421 25%, #0a0e18 25%, #0a0e18 75%, #0e1421 75%) 9px 9px / 18px 18px;
   }
-  #board { width: 100%; height: auto; display: block; touch-action: none; }
+  #board { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   #board.drawing { cursor: crosshair; }
   .empty-tip { text-align: center; color: var(--muted); font-size: .86rem; padding: 70px 24px; line-height: 1.9; }
   .empty-tip b { color: var(--accent); }
@@ -442,12 +442,24 @@
   }
 
   /* ---------------- 自由笔画线 ---------------- */
+  // 用 getScreenCTM 反算用户坐标：画布缩放 / 居中留白 / letterbox 都能跟对，
+  // 比「按 rect 比例换算」稳（rect 换算在 letterbox 时会偏）。
   function toUser(ev) {
-    const r = board.getBoundingClientRect();
-    const vb = board.viewBox.baseVal;
-    return [vb.x + ((ev.clientX - r.left) / r.width) * vb.width,
-            vb.y + ((ev.clientY - r.top) / r.height) * vb.height];
+    const vb = S.src.vb;
+    const fix = (x, y) => [clamp(x, vb.minX, vb.minX + vb.w), clamp(y, vb.minY, vb.minY + vb.h)];
+    const m = board.getScreenCTM && board.getScreenCTM();
+    if (m) {
+      const pt = board.createSVGPoint();
+      pt.x = ev.clientX; pt.y = ev.clientY;
+      const p = pt.matrixTransform(m.inverse());
+      return fix(p.x, p.y);
+    }
+    const r = board.getBoundingClientRect(), bv = board.viewBox.baseVal;
+    return fix(bv.x + ((ev.clientX - r.left) / r.width) * bv.width,
+               bv.y + ((ev.clientY - r.top) / r.height) * bv.height);
   }
+  // 画布尺寸变化（窗口缩放 / 侧栏折叠）时重排，保证可画区域 = 图片区域
+  window.addEventListener('resize', () => { if (S.view !== 'empty') render(); });
   let drawing = false;
   board.addEventListener('pointerdown', (ev) => {
     if (S.cutMode !== 'free' || S.view !== 'source') return;
@@ -566,6 +578,19 @@
       check('浓档元素数量 ≥350', elems >= 350, elems);
       $('texSel').value = '0.25';
       generate();
+
+      // 画布缩放后坐标映射仍然准确：点画布中心 → 应落在图片中心
+      S.cutMode = 'free';
+      const rc = board.getBoundingClientRect();
+      board.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, clientX: rc.left + rc.width / 2, clientY: rc.top + rc.height / 2,
+        pointerId: 1, isPrimary: true, button: 0, buttons: 1,
+      }));
+      const midP = S.stroke && S.stroke[0], vb0 = S.src.vb;
+      const nearMid = midP && Math.abs(midP[0] - (vb0.minX + vb0.w / 2)) < vb0.w * 0.02 &&
+        Math.abs(midP[1] - (vb0.minY + vb0.h / 2)) < vb0.h * 0.02;
+      check('画布缩放后坐标映射正确', !!nearMid, midP ? midP.map(n2).join(',') : '-');
+      drawing = false; S.stroke = null; render();
 
       // ② 3×3
       S.cutMode = '3x3';
