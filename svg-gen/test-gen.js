@@ -59,21 +59,20 @@ for (const style of STYLES) {
     const refs = [...svg.matchAll(/url\(#([\w-]+)\)/g)].map((m) => m[1]);
     for (const r of new Set(refs)) if (!new RegExp(`id="${r}"`).test(svg)) problems.push('missing def #' + r);
 
-    // 纹理层必须存在且覆盖面足够细（结构上保证没有大面积连续纯色）
-    if (!svg.includes('id="tx-hatch"')) problems.push('no hatch');
-    if (!svg.includes('id="tx-grain"')) problems.push('no grain');
+    // 纹理层必须多层齐备，且线距足够细（结构上保证没有大面积连续纯色）
+    ['tx-hatch', 'tx-hatch2', 'tx-dots', 'tx-grid', 'tx-lines', 'tx-grain', 'tx-grain2'].forEach((id) => {
+      if (!svg.includes('id="' + id + '"')) problems.push('missing layer #' + id);
+      if (!svg.includes('url(#' + id + ')')) problems.push('layer not applied #' + id);
+    });
     const step = /pattern id="tx-hatch" width="([\d.]+)"/.exec(svg);
     const stepVal = step ? parseFloat(step[1]) : 1e9;
-    const minSide = Math.min(size[0], size[1]);
-    if (stepVal > 22.5) problems.push('hatch too coarse: ' + stepVal);
-    const hatchAt = svg.indexOf('fill="url(#tx-hatch)"');
-    if (hatchAt < 0) problems.push('hatch not applied');
+    if (!(stepVal > 0) || stepVal > 13.5) problems.push('hatch too coarse: ' + stepVal);
 
     // 元素丰富度
     const shapes = (svg.match(/<(path|circle|rect|polygon|ellipse|line|polyline)\b/g) || []).length;
-    if (shapes < 150) problems.push('too few elements: ' + shapes);
+    if (shapes < 350) problems.push('too few elements: ' + shapes);
     const sizeKb = Math.round(svg.length / 1024);
-    if (sizeKb > 160) problems.push('too heavy: ' + sizeKb + 'KB');
+    if (sizeKb > 250) problems.push('too heavy: ' + sizeKb + 'KB');
 
     if (shapes < worst.elements) { worst = { elements: shapes, size: sizeKb, seed }; }
     if (problems.length) {

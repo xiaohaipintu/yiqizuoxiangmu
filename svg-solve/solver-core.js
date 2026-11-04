@@ -62,7 +62,12 @@ var SolverCore = (function () {
             }
           }
         }
-        resolve({ id: piece.id, w: w, h: h, px: blurRGBA(px, mask, w, h), mask: mask, edge: edge, inside: inside, piece: piece });
+        // 多遍模糊：图像纹理越密（网纹/点阵的周期越小），越需要更大的模糊半径，
+        // 否则周期图案会让不同偏移的接缝分数趋同。遍数随碎片尺寸走。
+        var passes = Math.max(2, Math.min(8, Math.round(Math.min(w, h) / 24)));
+        var blurred = px;
+        for (var bp = 0; bp < passes; bp++) blurred = blurRGBA(blurred, mask, w, h);
+        resolve({ id: piece.id, w: w, h: h, px: blurred, mask: mask, edge: edge, inside: inside, piece: piece });
       };
       img.onerror = function () { resolve(null); };
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pieceSvgText(piece));

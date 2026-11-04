@@ -415,49 +415,87 @@ var GenCore = (function () {
     return { defs: defs.join(''), fills };
   }
 
-  /* ---------------- 质感叠加层：细网线 + 颗粒 + 成千碎点（保证没有大面积连续纯色） ---------------- */
-  function richness(r, W, H, pal) {
+  /* ---------------- 质感叠加层：七层纹理（细斜线 / 交叉网 / 点阵 / 网格 / 微条纹 / 双频颗粒 / 碎点） ----------------
+     目的：不放大也看得见纹理，任意局部都不存在「大面积连续纯色」。 */
+  function richness(r, W, H, pal, strength) {
     const minSide = Math.min(W, H);
+    const k = 0.3 + 0.7 * clamp(strength == null ? 1 : strength, 0, 1);
     const ink = pal.isDark ? '#ffffff' : '#0b0f18';
     const defs = [];
     const body = [];
+    const layer = (fill, blend, extra) =>
+      `<rect width="${n2(W)}" height="${n2(H)}" fill="${fill}" ${extra || ''} style="mix-blend-mode:${blend}"/>`;
 
-    // 1) 细密斜线
-    const step1 = clamp(minSide * r.float(0.006, 0.013), 2.5, 22);
-    defs.push(`<pattern id="tx-hatch" width="${n2(step1)}" height="${n2(step1)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${n1(r.float(0, 180))})">` +
-      `<line x1="0" y1="0" x2="0" y2="${n2(step1)}" stroke="${ink}" stroke-opacity="${r.float(0.07, 0.17).toFixed(2)}" stroke-width="${n2(step1 * 0.3)}"/></pattern>`);
+    // 1) 细密斜线（最密的一层）
+    const s1 = clamp(minSide * r.float(0.0032, 0.008), 2, 13);
+    defs.push(`<pattern id="tx-hatch" width="${n2(s1)}" height="${n2(s1)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${n1(r.float(0, 180))})">` +
+      `<line x1="0" y1="0" x2="0" y2="${n2(s1)}" stroke="${ink}" stroke-opacity="${r.float(0.12, 0.26).toFixed(2)}" stroke-width="${n2(Math.max(0.35, s1 * 0.34))}"/></pattern>`);
 
-    // 2) 正交细网格
-    const step2 = clamp(minSide * r.float(0.016, 0.042), 11, 74);
-    defs.push(`<pattern id="tx-grid" width="${n2(step2)}" height="${n2(step2)}" patternUnits="userSpaceOnUse">` +
-      `<path d="M 0 0 H ${n2(step2)} M 0 0 V ${n2(step2)}" fill="none" stroke="${ink}" stroke-opacity="${r.float(0.05, 0.11).toFixed(2)}" stroke-width="${n2(Math.max(0.4, step2 * 0.045))}"/></pattern>`);
+    // 2) 第二向斜线（和第一层交叉成网）
+    const s2 = clamp(minSide * r.float(0.007, 0.018), 4, 24);
+    defs.push(`<pattern id="tx-hatch2" width="${n2(s2)}" height="${n2(s2)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${n1(r.float(0, 180))})">` +
+      `<line x1="0" y1="0" x2="0" y2="${n2(s2)}" stroke="${ink}" stroke-opacity="${r.float(0.06, 0.15).toFixed(2)}" stroke-width="${n2(Math.max(0.3, s2 * 0.2))}"/></pattern>`);
 
-    // 3) 颗粒噪声
+    // 3) 微点阵
+    const s3 = clamp(minSide * r.float(0.007, 0.016), 4, 22);
+    const r3 = Math.max(0.28, s3 * r.float(0.08, 0.2));
+    const c0 = pal.colors[0];
+    const dotInk = r.bool(0.55) ? ink : hsl(c0.h + r.float(-20, 20), clamp(c0.s, 35, 92), pal.isDark ? r.float(74, 92) : r.float(12, 30));
+    defs.push(`<pattern id="tx-dots" width="${n2(s3)}" height="${n2(s3)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${n1(r.float(0, 90))})">` +
+      `<circle cx="${n2(s3 / 2)}" cy="${n2(s3 / 2)}" r="${n2(r3)}" fill="${dotInk}" fill-opacity="${r.float(0.2, 0.45).toFixed(2)}"/></pattern>`);
+
+    // 4) 正交细网格
+    const s4 = clamp(minSide * r.float(0.011, 0.028), 8, 48);
+    defs.push(`<pattern id="tx-grid" width="${n2(s4)}" height="${n2(s4)}" patternUnits="userSpaceOnUse">` +
+      `<path d="M 0 0 H ${n2(s4)} M 0 0 V ${n2(s4)}" fill="none" stroke="${ink}" stroke-opacity="${r.float(0.07, 0.15).toFixed(2)}" stroke-width="${n2(Math.max(0.4, s4 * 0.04))}"/></pattern>`);
+
+    // 5) 微条纹（再一个方向，很淡，专治大面积平铺感）
+    const s5 = clamp(minSide * r.float(0.004, 0.01), 3, 16);
+    defs.push(`<pattern id="tx-lines" width="${n2(s5)}" height="${n2(s5)}" patternUnits="userSpaceOnUse" patternTransform="rotate(${n1(r.float(0, 180))})">` +
+      `<rect x="0" y="0" width="${n2(s5)}" height="${n2(s5 * 0.45)}" fill="${ink}" fill-opacity="${r.float(0.05, 0.13).toFixed(2)}"/></pattern>`);
+
+    // 6) 双频颗粒（粗 + 细，叠出胶片噪点感）
     defs.push(`<filter id="tx-grain" x="0" y="0" width="100%" height="100%">` +
-      `<feTurbulence type="fractalNoise" baseFrequency="${r.float(0.55, 1.05).toFixed(2)}" numOctaves="3" stitchTiles="stitch"/>` +
+      `<feTurbulence type="fractalNoise" baseFrequency="${r.float(0.5, 0.95).toFixed(2)}" numOctaves="3" stitchTiles="stitch"/>` +
+      `<feColorMatrix type="saturate" values="0"/></filter>`);
+    defs.push(`<filter id="tx-grain2" x="0" y="0" width="100%" height="100%">` +
+      `<feTurbulence type="fractalNoise" baseFrequency="${r.float(1.4, 2.4).toFixed(2)}" numOctaves="2" stitchTiles="stitch"/>` +
       `<feColorMatrix type="saturate" values="0"/></filter>`);
 
-    body.push(`<rect width="${n2(W)}" height="${n2(H)}" fill="url(#tx-hatch)" style="mix-blend-mode:${pal.isDark ? 'overlay' : 'multiply'}"/>`);
-    body.push(`<rect width="${n2(W)}" height="${n2(H)}" fill="url(#tx-grid)" style="mix-blend-mode:${pal.isDark ? 'screen' : 'multiply'}"/>`);
-    body.push(`<rect width="${n2(W)}" height="${n2(H)}" filter="url(#tx-grain)" opacity="${pal.isDark ? '0.22' : '0.16'}" style="mix-blend-mode:overlay"/>`);
+    body.push(layer('url(#tx-hatch)', 'overlay'));
+    body.push(layer('url(#tx-hatch2)', 'overlay'));
+    body.push(layer('url(#tx-lines)', 'overlay'));
+    body.push(layer('url(#tx-dots)', 'overlay'));
+    body.push(layer('url(#tx-grid)', pal.isDark ? 'screen' : 'multiply'));
+    body.push(layer('url(#tx-grain)', 'overlay', `opacity="${pal.isDark ? '0.26' : '0.18'}"`));
+    body.push(layer('url(#tx-grain2)', 'overlay', `opacity="${pal.isDark ? '0.18' : '0.13'}"`));
 
-    // 4) 碎点 / 短线 / 小弧：把空白处也铺满元素
-    const n = r.int(140, 300);
+    // 7) 碎点 / 短条 / 小弧 / 十字：把空白处也铺满元素
+    const n = r.int(380, 700);
     const spk = [];
     for (let i = 0; i < n; i++) {
       const x = r.float(-0.01, 1.01) * W;
       const y = r.float(-0.01, 1.01) * H;
       const col = pal.colors[r.int(0, pal.colors.length - 1)];
-      const s = minSide * r.float(0.0015, 0.007);
-      const c = hsl(col.h + r.float(-12, 12), col.s, clamp(col.l + r.float(-18, 18), 14, 92), r.float(0.18, 0.62));
-      const kind = r.int(0, 2);
-      if (kind === 0) spk.push(`<circle cx="${n1(x)}" cy="${n1(y)}" r="${n2(s)}" fill="${c}"/>`);
-      else if (kind === 1) spk.push(`<rect x="${n1(x)}" y="${n1(y)}" width="${n2(s * 2.6)}" height="${n2(s * 0.9)}" fill="${c}" transform="rotate(${Math.round(r.float(0, 180))} ${n1(x)} ${n1(y)})"/>`);
-      else spk.push(`<path d="M ${n1(x)} ${n1(y)} q ${n1(s * 4)} ${n1(-s * 3)} ${n1(s * 8)} 0" fill="none" stroke="${c}" stroke-width="${n2(Math.max(0.35, s * 0.7))}" stroke-linecap="round"/>`);
+      const s = minSide * r.float(0.0012, 0.0075);
+      const c = hsl(col.h + r.float(-14, 14), col.s, clamp(col.l + r.float(-22, 22), 12, 94), r.float(0.2, 0.7));
+      switch (r.int(0, 3)) {
+        case 0:
+          spk.push(`<circle cx="${n1(x)}" cy="${n1(y)}" r="${n2(s)}" fill="${c}"/>`);
+          break;
+        case 1:
+          spk.push(`<rect x="${n1(x)}" y="${n1(y)}" width="${n2(s * 2.8)}" height="${n2(s * 0.85)}" fill="${c}" transform="rotate(${Math.round(r.float(0, 180))} ${n1(x)} ${n1(y)})"/>`);
+          break;
+        case 2:
+          spk.push(`<path d="M ${n1(x)} ${n1(y)} q ${n1(s * 4)} ${n1(-s * 3)} ${n1(s * 8)} 0" fill="none" stroke="${c}" stroke-width="${n2(Math.max(0.35, s * 0.7))}" stroke-linecap="round"/>`);
+          break;
+        default:
+          spk.push(`<path d="M ${n1(x - s * 2)} ${n1(y)} H ${n1(x + s * 2)} M ${n1(x)} ${n1(y - s * 2)} V ${n1(y + s * 2)}" fill="none" stroke="${c}" stroke-width="${n2(Math.max(0.3, s * 0.55))}" stroke-linecap="round"/>`);
+      }
     }
     body.push(`<g>${spk.join('')}</g>`);
 
-    return { defs: defs.join(''), body: body.join('') };
+    return { defs: defs.join(''), body: '<g opacity="' + k.toFixed(2) + '">' + body.join('') + '</g>' };
   }
 
   const STYLES = {
@@ -475,14 +513,14 @@ var GenCore = (function () {
   const STYLE_KEYS = Object.keys(STYLES);
 
   /* ---------------- 组装整张 SVG ---------------- */
-  function buildArt({ seed, style = 'random', size = [900, 900], grain = true }) {
+  function buildArt({ seed, style = 'random', size = [900, 900], grain = true, texture = 1 }) {
     const r = makeRand(seed);
     const [W, H] = size;
     const pal = makePalette(r);
     const cg = makeColorGradients(r, pal);
     let styleId = style && style !== 'random' && STYLES[style] ? style : r.pick(STYLE_KEYS);
     const res = STYLES[styleId].draw(r, { W, H, pal, cg: cg.fills }) || {};
-    const tx = grain ? richness(r, W, H, pal) : { defs: '', body: '' };
+    const tx = grain ? richness(r, W, H, pal, texture) : { defs: '', body: '' };
 
     const parts = [];
     parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="随机生成的 SVG 图像">`);
