@@ -219,11 +219,12 @@
   <section class="card canvas-card">
     <div class="toolbar">
       <div class="seg" id="modeSeg">
-        <button data-mode="vline" class="on">竖线 <span class="kbd">V</span></button>
+        <button data-mode="stroke" class="on">自由笔 <span class="kbd">D</span></button>
+        <button data-mode="vline">竖线 <span class="kbd">V</span></button>
         <button data-mode="hline">横线 <span class="kbd">H</span></button>
-        <button data-mode="free">折线 <span class="kbd">F</span></button>
+        <button data-mode="free">点选折线 <span class="kbd">F</span></button>
       </div>
-      <span class="hint" id="hint">点击画布添加竖向切割线，拖圆点可移动</span>
+      <span class="hint" id="hint">按住鼠标划一道 = 一刀，松手立刻切；划两下就分成几块</span>
       <span style="flex:1"></span>
       <button id="btnUndo" class="ghost">撤销上一刀</button>
     </div>
@@ -284,6 +285,11 @@
       </div>
       <div class="row">
         <button id="btnCut" class="primary" style="flex:1">开始切割</button>
+      </div>
+      <div class="row">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:.8rem">
+          <input type="checkbox" id="chkAutoCut" checked /> 一笔画完自动切割
+        </label>
       </div>
       <div class="row">
         <button id="btnZip" disabled style="flex:1">全部下载 ZIP</button>
@@ -624,7 +630,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
   /* ------------------------------------------------------------------ 状态 */
   var src = null;      // { name, minX, minY, w, h, innerMarkup, attrs, text }
   var cuts = [];       // { id, type:'vline'|'hline'|'free', pos, pts }
-  var mode = 'vline';
+  var mode = 'stroke';
   var drawing = null;  // { pts: [[x,y], …] }
   var drag = null;     // { id, i }
   var pieces = [];
@@ -635,6 +641,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
   var precisionSel = $('precision');
 
   var HINTS = {
+    stroke: '按住鼠标划一道 = 一刀，松手立刻切；两端自动吸到最近的边',
     vline: '点击画布添加竖向切割线，拖圆点可移动',
     hline: '点击画布添加横向切割线，拖圆点可移动',
     free: '连续点击落点画折线，双击或回车结束；Esc 取消',
@@ -753,15 +760,19 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
       }
     }
     if (drawing) {
-      var dp = drawing.pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
-      out.push('<polyline class="cl drawing" points="' + dp + '" />');
-      for (var q = 0; q < drawing.pts.length; q++) {
-        out.push('<circle class="dot-draw" cx="' + drawing.pts[q][0] + '" cy="' + drawing.pts[q][1] + '" r="' + (r * 0.7) + '" />');
+      var dp = drawing.pts.map(function (p) { return n2(p[0]) + ',' + n2(p[1]); }).join(' ');
+      out.push('<polyline class="cl drawing' + (drawing.live ? ' live' : '') + '"' +
+        (drawing.live ? ' id="liveStroke"' : '') + ' points="' + dp + '" />');
+      if (!drawing.live) {
+        for (var q = 0; q < drawing.pts.length; q++) {
+          out.push('<circle class="dot-draw" cx="' + drawing.pts[q][0] + '" cy="' + drawing.pts[q][1] + '" r="' + (r * 0.7) + '" />');
+        }
       }
     }
     overlay.innerHTML = '<defs><style>' +
-      '.cl{fill:none;stroke:#5eead4;stroke-width:' + n2(sw) + ';stroke-dasharray:' + n2(sw * 2.6) + ' ' + n2(sw * 1.8) + ';stroke-linecap:round;filter:drop-shadow(0 0 ' + n2(sw) + ' rgba(0,0,0,.75));}' +
+      '.cl{fill:none;stroke:#5eead4;stroke-width:' + n2(sw) + ';stroke-dasharray:' + n2(sw * 2.6) + ' ' + n2(sw * 1.8) + ';stroke-linecap:round;pointer-events:none;filter:drop-shadow(0 0 ' + n2(sw) + ' rgba(0,0,0,.75));}' +
       '.cl.drawing{stroke:#a5b4fc;}' +
+      '.cl.live{stroke-dasharray:none;stroke-linejoin:round;}' +
       '.handle{cursor:grab;fill:#5eead4;stroke:#04231f;stroke-width:' + n2(sw * 0.7) + ';}' +
       '.handle:hover{fill:#99f6e4;}' +
       '.dot-draw{fill:#a5b4fc;stroke:#0b1220;stroke-width:' + n2(sw * 0.6) + ';}' +
@@ -810,7 +821,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
   }
 
   function finishFree() {
-    if (!drawing) return;
+    if (!drawing || drawing.live) return;
     var pts = drawing.pts.slice();
     // 双击会在同一位置多落一个点，去掉
     while (pts.length > 1) {
@@ -828,6 +839,84 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
     renderOverlay();
   }
 
+  /* ------- 自由笔：按住划一道 = 一条切割线 ------- */
+  function updateLiveStroke() {
+    var el = overlay.querySelector('#liveStroke');
+    if (!el || !drawing) { renderOverlay(); return; }
+    el.setAttribute('points', drawing.pts.map(function (p) { return n2(p[0]) + ',' + n2(p[1]); }).join(' '));
+  }
+
+  function dedupePts(pts) {
+    var minStep = Math.max(src.w, src.h) * 0.002;
+    var out = [pts[0]];
+    for (var i = 1; i < pts.length; i++) {
+      var a = out[out.length - 1], b = pts[i];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= minStep) out.push(b);
+    }
+    // 末点如果被抽稀掉了，补回去（保证笔画长度完整）
+    var last = pts[pts.length - 1], tail = out[out.length - 1];
+    if (out.length > 1 && Math.hypot(last[0] - tail[0], last[1] - tail[1]) > minStep * 0.5) out.push(last);
+    return out;
+  }
+
+  function rdpOpen(pts, tol) {
+    if (pts.length < 3) return pts.slice();
+    var keep = new Uint8Array(pts.length);
+    keep[0] = 1; keep[pts.length - 1] = 1;
+    var stack = [[0, pts.length - 1]];
+    while (stack.length) {
+      var seg = stack.pop(), a = seg[0], b = seg[1];
+      if (b - a < 2) continue;
+      var p1 = pts[a], p2 = pts[b];
+      var dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+      var len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 1e-9) continue;
+      var best = -1, bestD = -1;
+      for (var i = a + 1; i < b; i++) {
+        var p = pts[i];
+        var d = Math.abs(dy * p[0] - dx * p[1] + p2[0] * p1[1] - p2[1] * p1[0]) / len;
+        if (d > bestD) { bestD = d; best = i; }
+      }
+      if (bestD > tol && best > 0) { keep[best] = 1; stack.push([a, best], [best, b]); }
+    }
+    var out = [];
+    for (var k = 0; k < pts.length; k++) if (keep[k]) out.push(pts[k]);
+    return out;
+  }
+
+  /* 笔画两端靠边就吸到边上：随手一划也能真正把画面切开 */
+  function snapEnds(pts) {
+    var snap = Math.max(src.w, src.h) * 0.05;
+    var x0 = src.minX, x1 = src.minX + src.w, y0 = src.minY, y1 = src.minY + src.h;
+    function one(p) {
+      var dl = p[0] - x0, dr = x1 - p[0], dt = p[1] - y0, db = y1 - p[1];
+      var m = Math.min(dl, dr, dt, db);
+      if (m > snap) return p;
+      if (m === dl) return [x0, p[1]];
+      if (m === dr) return [x1, p[1]];
+      if (m === dt) return [p[0], y0];
+      return [p[0], y1];
+    }
+    var out = pts.slice();
+    out[0] = one(out[0]);
+    out[out.length - 1] = one(out[out.length - 1]);
+    return out;
+  }
+
+  function finishStroke() {
+    var d = drawing;
+    drawing = null;
+    if (!d || !d.pts || d.pts.length < 2) { renderOverlay(); return; }
+    var pts = dedupePts(d.pts);
+    pts = snapEnds(pts);
+    pts = rdpOpen(pts, Math.max(src.w, src.h) * 0.0025);
+    if (pts.length < 2) { renderOverlay(); return; }
+    cuts.push({ id: uid++, type: 'free', pts: pts });
+    renderList();
+    renderOverlay();
+    if ($('chkAutoCut').checked) runCut();
+  }
+
   overlay.addEventListener('pointerdown', function (ev) {
     if (!src) return;
     var t = ev.target;
@@ -839,12 +928,28 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
       ev.preventDefault();
       return;
     }
+    if (mode === 'stroke') {
+      drawing = { pts: [toUser(ev)], live: true };
+      try { overlay.setPointerCapture(ev.pointerId); } catch (e) {}
+      ev.preventDefault();
+      renderOverlay();
+      return;
+    }
     if (mode === 'free') addFreePoint(toUser(ev));
     else addFullLine(mode, toUser(ev));
   });
 
   overlay.addEventListener('pointermove', function (ev) {
-    if (!drag || !src) return;
+    if (!src) return;
+    if (drawing && drawing.live) {
+      var lp = toUser(ev), prev = drawing.pts[drawing.pts.length - 1];
+      if (Math.hypot(lp[0] - prev[0], lp[1] - prev[1]) >= Math.max(src.w, src.h) * 0.003) {
+        drawing.pts.push(lp);
+        updateLiveStroke();
+      }
+      return;
+    }
+    if (!drag) return;
     var cut = null;
     for (var i = 0; i < cuts.length; i++) if (cuts[i].id === drag.id) { cut = cuts[i]; break; }
     if (!cut) return;
@@ -857,7 +962,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
     renderOverlay(); renderList();
   });
 
-  function endDrag() { drag = null; }
+  function endDrag() {
+    if (drawing && drawing.live) { finishStroke(); return; }
+    drag = null;
+  }
   overlay.addEventListener('pointerup', endDrag);
   overlay.addEventListener('pointercancel', endDrag);
 
@@ -964,6 +1072,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
     var k = e.key.toLowerCase();
     if (k === 'escape') { drawing = null; renderOverlay(); }
     else if (k === 'enter') { if (drawing) finishFree(); }
+    else if (k === 'd') { clickMode('stroke'); }
     else if (k === 'v') { clickMode('vline'); }
     else if (k === 'h') { clickMode('hline'); }
     else if (k === 'f') { clickMode('free'); }
@@ -1302,6 +1411,39 @@ if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
     cuts = [{ id: 400, type: 'vline', pos: src.minX + src.w / 2 }];
     var kd = new DOMParser().parseFromString(knifeSvg(), 'image/svg+xml');
     check('刀模线 SVG 良构', !kd.getElementsByTagName('parsererror').length && kd.getElementsByTagName('polyline').length === 1);
+
+    // 9) 自由笔：模拟「按住划一下」→ 松手自动切成两块
+    cuts = []; pieces = [];
+    $('chkAutoCut').checked = true;
+    clickMode('stroke');
+    var rc = overlay.getBoundingClientRect();
+    if (rc.width < 10) {
+      lines.push('SKIP 自由笔（无头布局尺寸为 0）');
+    } else {
+      var fire = function (type, fx, fy) {
+        overlay.dispatchEvent(new PointerEvent(type, {
+          bubbles: true, cancelable: true, pointerId: 1, isPrimary: true,
+          button: 0, buttons: 1,
+          clientX: rc.left + rc.width * fx, clientY: rc.top + rc.height * fy,
+        }));
+      };
+      fire('pointerdown', 0.03, 0.06);
+      fire('pointermove', 0.3, 0.35);
+      fire('pointermove', 0.6, 0.62);
+      fire('pointermove', 0.96, 0.94);
+      fire('pointerup', 0.96, 0.94);
+      check('划一道 = 1 条切割线', cuts.length === 1 && cuts[0].type === 'free', 'cuts=' + cuts.length);
+      check('笔画两端吸到画布边',
+        cuts.length === 1 && (Math.abs(cuts[0].pts[0][0] - src.minX) < 1 || Math.abs(cuts[0].pts[0][1] - src.minY) < 1),
+        cuts.length ? JSON.stringify(cuts[0].pts[0]) : '-');
+      check('松手自动切割 = 2 块', pieces.length === 2, 'pieces=' + pieces.length);
+
+      fire('pointerdown', 0.04, 0.5);
+      fire('pointermove', 0.5, 0.5);
+      fire('pointermove', 0.96, 0.5);
+      fire('pointerup', 0.96, 0.5);
+      check('划第二下 = 4 块', pieces.length === 4, 'pieces=' + pieces.length + ' cuts=' + cuts.length);
+    }
 
     lines.push('');
     lines.push(ok ? 'SELFTEST OK' : 'SELFTEST FAILED');
