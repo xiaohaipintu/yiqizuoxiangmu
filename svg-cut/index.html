@@ -1,0 +1,1324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SVG 线切割 · Line Cutter</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #080b14;
+    --panel: #111726;
+    --panel-2: #18202f;
+    --line: #26324a;
+    --text: #e8eefc;
+    --muted: #8d9ab6;
+    --accent: #5eead4;
+    --accent-2: #a5b4fc;
+    --danger: #fb7185;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1100px 700px at 10% -10%, #1a2a48 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #2a1b45 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 18px 22px 10px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .02em; }
+  header h1 span { color: var(--muted); font-weight: 400; font-size: .8rem; margin-left: 6px; }
+  header p { margin: 0; color: var(--muted); font-size: .82rem; }
+  header a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 348px;
+    gap: 14px;
+    padding: 0 22px 8px;
+    align-items: start;
+  }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+
+  .card {
+    background: linear-gradient(180deg, rgba(24, 32, 47, .92), rgba(17, 23, 38, .92));
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  /* ---------- 画布 ---------- */
+  .canvas-card { display: flex; flex-direction: column; }
+  .toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .seg { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button {
+    background: transparent; border: 0; color: var(--muted);
+    padding: 7px 13px; font-size: .84rem; cursor: pointer; font-family: inherit;
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: linear-gradient(180deg, #2c3c5c, #23324d); color: #fff; }
+  .hint { color: var(--muted); font-size: .78rem; }
+
+  .stage {
+    position: relative;
+    margin: 12px;
+    background:
+      linear-gradient(45deg, #0e1421 25%, transparent 25%, transparent 75%, #0e1421 75%) 0 0 / 18px 18px,
+      linear-gradient(45deg, #0e1421 25%, #0a0e18 25%, #0a0e18 75%, #0e1421 75%) 9px 9px / 18px 18px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    overflow: hidden;
+    min-height: 260px;
+  }
+  .stage.empty { display: grid; place-items: center; }
+  .art, .overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .art { display: block; }
+  .art svg { width: 100% !important; height: 100% !important; display: block; }
+  .overlay { touch-action: none; cursor: crosshair; }
+  .empty-tip {
+    position: relative; z-index: 3; text-align: center; color: var(--muted);
+    font-size: .85rem; padding: 24px; pointer-events: none;
+  }
+  .empty-tip b { color: var(--accent); }
+
+  .meta {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    padding: 0 14px 12px; color: var(--muted); font-size: .78rem;
+  }
+  .meta b { color: var(--text); font-weight: 600; }
+
+  /* ---------- 面板 ---------- */
+  .panel { display: flex; flex-direction: column; gap: 12px; }
+  .box { padding: 12px 14px 14px; }
+  .box h2 {
+    margin: 0 0 10px; font-size: .78rem; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
+  }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 8px; }
+
+  button, .filebtn {
+    font-family: inherit; font-size: .84rem; cursor: pointer;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 13px;
+    transition: border-color .15s, background .15s, transform .06s;
+  }
+  button:hover, .filebtn:hover { border-color: #3c4c72; background: #1d2740; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+  button.primary {
+    background: linear-gradient(180deg, #2dd4bf, #14b8a6);
+    color: #04231f; border-color: transparent; font-weight: 650;
+  }
+  button.primary:hover { filter: brightness(1.06); background: linear-gradient(180deg, #2dd4bf, #14b8a6); }
+  button.ghost { background: transparent; }
+  .filebtn { display: inline-block; }
+  .filebtn input { display: none; }
+
+  input[type="number"], input[type="text"], select, textarea {
+    font-family: inherit; font-size: .84rem;
+    background: #0c1220; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 9px;
+  }
+  input[type="number"] { width: 62px; }
+  select { min-width: 96px; }
+  textarea { width: 100%; resize: vertical; min-height: 62px; font-family: ui-monospace, Consolas, monospace; font-size: .76rem; }
+
+  .cutlist { list-style: none; margin: 10px 0 0; padding: 0; max-height: 168px; overflow: auto; }
+  .cutlist li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 8px; font-size: .8rem; color: var(--muted);
+    background: #0d1424; margin-bottom: 5px;
+  }
+  .cutlist li .tag {
+    width: 20px; height: 20px; flex: 0 0 20px; border-radius: 6px;
+    display: grid; place-items: center; font-size: .68rem;
+    background: #1d2a44; color: var(--accent-2);
+  }
+  .cutlist li .name { flex: 1 1 auto; }
+  .cutlist li button {
+    padding: 2px 8px; font-size: .78rem; line-height: 1.4;
+    background: transparent; border-color: transparent; color: var(--danger);
+  }
+  .cutlist li button:hover { background: #2a1622; border-color: #4a2431; }
+  .cutlist .none { color: #5c6a86; font-size: .8rem; padding: 4px 2px; }
+
+  /* ---------- 结果 ---------- */
+  .results-wrap { padding: 6px 22px 30px; }
+  .results-head {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .results-head h2 { margin: 0; font-size: .95rem; }
+  .results-head .stat { color: var(--muted); font-size: .8rem; }
+  .results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: 10px;
+  }
+  .piece {
+    position: relative;
+    background: linear-gradient(45deg, #101828 25%, transparent 25%, transparent 75%, #101828 75%) 0 0 / 14px 14px,
+      linear-gradient(45deg, #101828 25%, #0a0f1a 25%, #0a0f1a 75%, #101828 75%) 7px 7px / 14px 14px;
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 10px 8px;
+    display: flex; flex-direction: column; gap: 6px; align-items: center;
+  }
+  .piece img { max-width: 100%; max-height: 118px; display: block; border-radius: 4px; }
+  .piece .cap { font-size: .7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .piece .dl {
+    position: absolute; top: 6px; right: 6px;
+    padding: 1px 7px; font-size: .72rem; border-radius: 6px;
+    background: #0c1220cc; border-color: var(--line); opacity: 0;
+    transition: opacity .15s;
+  }
+  .piece:hover .dl { opacity: 1; }
+  .empty-res { color: var(--muted); font-size: .84rem; }
+
+  /* ---------- toast ---------- */
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
+    background: #0e1728ee; border: 1px solid var(--line); color: var(--text);
+    padding: 9px 16px; border-radius: 10px; font-size: .84rem;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+    z-index: 99; backdrop-filter: blur(6px);
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  #report { padding: 0 22px 24px; font-family: ui-monospace, Consolas, monospace; font-size: .76rem; color: var(--muted); white-space: pre-wrap; }
+  #report.ok { color: var(--accent); }
+  #report.fail { color: var(--danger); }
+  .kbd { font-family: ui-monospace, Consolas, monospace; background: #0c1220; border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font-size: .74rem; color: var(--accent-2); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SVG 线切割 <span>Line Cutter</span></h1>
+  <p>载入任意 SVG → 画横线／竖线／自由折线 → 切成多块，逐块导出独立 SVG（可打包 ZIP）。
+     需要随机图源？用 <a href="../svg-gen/index.html">随机 SVG 生成器</a>。</p>
+</header>
+
+<main>
+  <section class="card canvas-card">
+    <div class="toolbar">
+      <div class="seg" id="modeSeg">
+        <button data-mode="vline" class="on">竖线 <span class="kbd">V</span></button>
+        <button data-mode="hline">横线 <span class="kbd">H</span></button>
+        <button data-mode="free">折线 <span class="kbd">F</span></button>
+      </div>
+      <span class="hint" id="hint">点击画布添加竖向切割线，拖圆点可移动</span>
+      <span style="flex:1"></span>
+      <button id="btnUndo" class="ghost">撤销上一刀</button>
+    </div>
+
+    <div class="stage empty" id="stage">
+      <div class="art" id="art"></div>
+      <svg class="overlay" id="overlay" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="empty-tip" id="emptyTip">拖入 SVG 文件到此处，或点右侧 <b>载入示例</b></div>
+    </div>
+
+    <div class="meta">
+      <span>画布 <b id="metaSize">—</b></span>
+      <span>切割线 <b id="metaCuts">0</b> 条</span>
+      <span>坐标原点 <b id="metaOrigin">—</b></span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="card box">
+      <h2>1 · 源图</h2>
+      <div class="row">
+        <label class="filebtn">选择 SVG 文件<input type="file" id="fileInput" accept=".svg,image/svg+xml" /></label>
+        <button id="btnDemo">载入示例</button>
+        <button id="btnClearCuts" class="ghost">清空切割线</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <textarea id="pasteBox" placeholder="或直接粘贴 &lt;svg&gt;…&lt;/svg&gt; 代码"></textarea>
+      </div>
+      <div class="row">
+        <button id="btnPaste">从代码载入</button>
+        <span class="hint" id="srcName" style="font-size:.76rem">未载入</span>
+      </div>
+    </div>
+
+    <div class="card box">
+      <h2>2 · 切割线</h2>
+      <div class="row">
+        <label>列 <input type="number" id="gCols" value="3" min="1" max="30" /></label>
+        <label>行 <input type="number" id="gRows" value="3" min="1" max="30" /></label>
+        <label>抖动 <input type="number" id="gJit" value="0" min="0" max="10" step="1" />%</label>
+      </div>
+      <div class="row">
+        <button id="btnGrid">生成网格切割线</button>
+      </div>
+      <ul class="cutlist" id="cutList"><li class="none">还没有切割线</li></ul>
+    </div>
+
+    <div class="card box">
+      <h2>3 · 切割 / 导出</h2>
+      <div class="row">
+        <label>精度
+          <select id="precision">
+            <option value="900">快（900px）</option>
+            <option value="1400" selected>标准（1400px）</option>
+            <option value="2000">精细（2000px）</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <button id="btnCut" class="primary" style="flex:1">开始切割</button>
+      </div>
+      <div class="row">
+        <button id="btnZip" disabled style="flex:1">全部下载 ZIP</button>
+        <button id="btnKnife" disabled>刀模线 SVG</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<section class="results-wrap">
+  <div class="results-head">
+    <h2>切出的碎片</h2>
+    <span class="stat" id="stat">切割后在这里预览，每块都能单独导出</span>
+  </div>
+  <div class="results" id="results"><div class="empty-res">还没有碎片。</div></div>
+</section>
+
+<div id="report"></div>
+<div id="toast"></div>
+
+<script id="cut-engine">
+/* =========================================================================
+   纯几何引擎：折线 → 栅格掩码 → 连通区域 → 轮廓环 → 简化多边形（局部坐标）
+   纯 JS，无 DOM 依赖，可在 Node 里直接跑（便于回归测试）
+   ========================================================================= */
+var CutEngine = (function () {
+  'use strict';
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+  /* 有向面积（screen 坐标系，y 向下） */
+  function area(ring) {
+    var s = 0, n = ring.length;
+    for (var i = 0; i < n; i++) {
+      var a = ring[i], b = ring[(i + 1) % n];
+      s += a[0] * b[1] - b[0] * a[1];
+    }
+    return s / 2;
+  }
+
+  /* 闭合环的 Douglas–Peucker 简化 */
+  function simplify(points, tol) {
+    var n = points.length;
+    if (n < 4) return points.slice();
+    var pts = points.concat([points[0]]);
+    var keep = new Uint8Array(pts.length);
+    keep[0] = 1; keep[pts.length - 1] = 1;
+
+    // 闭合环首尾重合，单锚点 DP 会退化成「只剩起点」→ 用离起点最远的点当第二锚点，分两段简化
+    var far = 0, farD = -1;
+    for (var fi = 1; fi < n; fi++) {
+      var fx = points[fi][0] - points[0][0], fy = points[fi][1] - points[0][1];
+      var fd = fx * fx + fy * fy;
+      if (fd > farD) { farD = fd; far = fi; }
+    }
+    if (farD <= 0) return points.slice();
+    keep[far] = 1;
+
+    function dpRun(a, b) {
+      var stack = [[a, b]];
+      while (stack.length) {
+        var seg = stack.pop(), i0 = seg[0], i1 = seg[1];
+        if (i1 - i0 < 2) continue;
+        var q1 = pts[i0], q2 = pts[i1];
+        var dx = q2[0] - q1[0], dy = q2[1] - q1[1];
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 1e-9) continue;
+        var best = -1, bestD = -1;
+        for (var i = i0 + 1; i < i1; i++) {
+          var p = pts[i];
+          var d = Math.abs(dy * p[0] - dx * p[1] + q2[0] * q1[1] - q2[1] * q1[0]) / len;
+          if (d > bestD) { bestD = d; best = i; }
+        }
+        if (bestD > tol && best > 0) {
+          keep[best] = 1;
+          stack.push([i0, best], [best, i1]);
+        }
+      }
+    }
+    dpRun(0, far);
+    dpRun(far, pts.length - 1);
+    var out = [];
+    for (var k = 0; k < pts.length - 1; k++) if (keep[k]) out.push(pts[k]);
+    return out;
+  }
+
+  /* 把局部坐标折线画到 cols×rows 的掩码上（3×3 方笔刷，避免斜向渗漏） */
+  function rasterize(polys, width, height, cols, rows) {
+    var mask = new Uint8Array(cols * rows);
+    var sx = cols / width, sy = rows / height;
+
+    function put(x, y) {
+      for (var dy = -1; dy <= 1; dy++) {
+        var yy = y + dy;
+        if (yy < 0 || yy >= rows) continue;
+        var base = yy * cols;
+        for (var dx = -1; dx <= 1; dx++) {
+          var xx = x + dx;
+          if (xx < 0 || xx >= cols) continue;
+          mask[base + xx] = 1;
+        }
+      }
+    }
+
+    for (var pi = 0; pi < polys.length; pi++) {
+      var poly = polys[pi];
+      if (!poly || !poly.length) continue;
+      if (poly.length === 1) {
+        put(clamp(Math.round(poly[0][0] * sx), 0, cols - 1), clamp(Math.round(poly[0][1] * sy), 0, rows - 1));
+        continue;
+      }
+      for (var i = 1; i < poly.length; i++) {
+        var x0 = clamp(Math.round(poly[i - 1][0] * sx), 0, cols - 1);
+        var y0 = clamp(Math.round(poly[i - 1][1] * sy), 0, rows - 1);
+        var x1 = clamp(Math.round(poly[i][0] * sx), 0, cols - 1);
+        var y1 = clamp(Math.round(poly[i][1] * sy), 0, rows - 1);
+        var dxp = Math.abs(x1 - x0), dyp = Math.abs(y1 - y0);
+        var stepX = x0 < x1 ? 1 : -1, stepY = y0 < y1 ? 1 : -1;
+        var err = dxp - dyp;
+        var x = x0, y = y0;
+        var guard = (dxp + dyp) * 2 + 8;
+        while (guard-- > 0) {
+          put(x, y);
+          if (x === x1 && y === y1) break;
+          var e2 = 2 * err;
+          if (e2 > -dyp) { err -= dyp; x += stepX; }
+          if (e2 < dxp) { err += dxp; y += stepY; }
+        }
+      }
+    }
+    return mask;
+  }
+
+  /* 4 连通泛洪标记，返回 {lab, regions} */
+  function labelRegions(mask, cols, rows) {
+    var n = cols * rows;
+    var lab = new Int32Array(n);
+    lab.fill(-1);
+    var stack = new Int32Array(n);
+    var regions = [];
+    var next = 0;
+    for (var i = 0; i < n; i++) {
+      if (mask[i] || lab[i] !== -1) continue;
+      var id = next++;
+      var sp = 0;
+      stack[sp++] = i;
+      lab[i] = id;
+      var count = 0;
+      var minX = cols, maxX = 0, minY = rows, maxY = 0;
+      while (sp > 0) {
+        var p = stack[--sp];
+        var y = (p / cols) | 0, x = p - y * cols;
+        count++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        var q;
+        if (x > 0) { q = p - 1; if (!mask[q] && lab[q] === -1) { lab[q] = id; stack[sp++] = q; } }
+        if (x < cols - 1) { q = p + 1; if (!mask[q] && lab[q] === -1) { lab[q] = id; stack[sp++] = q; } }
+        if (y > 0) { q = p - cols; if (!mask[q] && lab[q] === -1) { lab[q] = id; stack[sp++] = q; } }
+        if (y < rows - 1) { q = p + cols; if (!mask[q] && lab[q] === -1) { lab[q] = id; stack[sp++] = q; } }
+      }
+      regions.push({ id: id, count: count, minX: minX, maxX: maxX, minY: minY, maxY: maxY });
+    }
+    return { lab: lab, regions: regions };
+  }
+
+  /* 某个 label 的所有边界环（栅格角点坐标 0..cols / 0..rows） */
+  function traceRings(lab, cols, rows, id) {
+    var W = cols + 1;
+    var DIRX = [1, 0, -1, 0], DIRY = [0, 1, 0, -1];
+    var edgeMap = new Map();
+
+    function inside(x, y) {
+      if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
+      return lab[y * cols + x] === id;
+    }
+    function add(x, y, dir) {
+      var k = y * W + x;
+      var arr = edgeMap.get(k);
+      if (!arr) { arr = []; edgeMap.set(k, arr); }
+      arr.push(dir);
+    }
+
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < cols; x++) {
+        if (!inside(x, y)) continue;
+        if (!inside(x, y - 1)) add(x, y, 0);          // 上边 → 向右
+        if (!inside(x + 1, y)) add(x + 1, y, 1);      // 右边 → 向下
+        if (!inside(x, y + 1)) add(x + 1, y + 1, 2);  // 下边 → 向左
+        if (!inside(x - 1, y)) add(x, y + 1, 3);      // 左边 → 向上
+      }
+    }
+
+    var rings = [];
+    var keys = Array.from(edgeMap.keys());
+    for (var ki = 0; ki < keys.length; ki++) {
+      var k0 = keys[ki];
+      var alive = edgeMap.get(k0);
+      while (alive && alive.length) {
+        var sx = k0 % W, sy = (k0 - sx) / W;
+        var cx = sx, cy = sy;
+        var dir = alive.pop();
+        var pts = [];
+        var guard = cols * rows * 4 + 1000;
+        while (guard-- > 0) {
+          pts.push([cx, cy]);
+          cx += DIRX[dir]; cy += DIRY[dir];
+          if (cx === sx && cy === sy) break;
+          var cand = edgeMap.get(cy * W + cx);
+          if (!cand || !cand.length) break;
+          // 优先右转（保持区域在同一侧），再直行、左转、掉头
+          var prefer = [(dir + 1) & 3, dir, (dir + 3) & 3, (dir + 2) & 3];
+          var pickDir = -1, pickAt = -1;
+          for (var pi = 0; pi < prefer.length; pi++) {
+            var at = cand.indexOf(prefer[pi]);
+            if (at >= 0) { pickDir = prefer[pi]; pickAt = at; break; }
+          }
+          if (pickDir < 0) { pickDir = cand[cand.length - 1]; pickAt = cand.length - 1; }
+          cand.splice(pickAt, 1);
+          dir = pickDir;
+        }
+        if (pts.length >= 3) rings.push(pts);
+        alive = edgeMap.get(k0);
+      }
+    }
+    return rings;
+  }
+
+  /* 把切缝像素并入相邻区域（1 层 4 连通扩张）：相邻碎片的边界在中线对接，只剩 ~1 栅格像素的缝 */
+  function growKerf(lab, mask, cols, rows) {
+    var n = cols * rows;
+    var pending = [];
+    for (var p = 0; p < n; p++) {
+      if (!mask[p]) continue;
+      var y = (p / cols) | 0, x = p - y * cols;
+      var owner = -1, conflict = false, q, L;
+      if (x > 0) { q = p - 1; if (!mask[q] && (L = lab[q]) >= 0) { if (owner < 0) owner = L; else if (owner !== L) conflict = true; } }
+      if (x < cols - 1) { q = p + 1; if (!mask[q] && (L = lab[q]) >= 0) { if (owner < 0) owner = L; else if (owner !== L) conflict = true; } }
+      if (y > 0) { q = p - cols; if (!mask[q] && (L = lab[q]) >= 0) { if (owner < 0) owner = L; else if (owner !== L) conflict = true; } }
+      if (y < rows - 1) { q = p + cols; if (!mask[q] && (L = lab[q]) >= 0) { if (owner < 0) owner = L; else if (owner !== L) conflict = true; } }
+      if (!conflict && owner >= 0) pending.push(p, owner);
+    }
+    for (var i = 0; i < pending.length; i += 2) lab[pending[i]] = pending[i + 1];
+    return lab;
+  }
+
+  /* 主入口：局部坐标 width×height，cuts = [[ [x,y], … ], …] */
+  function computePieces(opts) {
+    var width = opts.width, height = opts.height;
+    var cuts = opts.cuts || [];
+    var res = opts.res || 1400;
+    var tol = opts.tol == null ? 0.7 : opts.tol;
+    var minPixels = opts.minPixels == null ? 14 : opts.minPixels;
+
+    var k = res / Math.max(width, height || 1);
+    var cols = Math.max(8, Math.min(3600, Math.round(width * k)));
+    var rows = Math.max(8, Math.min(3600, Math.round(height * k)));
+
+    var mask = rasterize(cuts, width, height, cols, rows);
+    var res2 = labelRegions(mask, cols, rows);
+    var lab = res2.lab, regions = res2.regions;
+    growKerf(lab, mask, cols, rows); // 切缝并入两侧区域，碎片之间只剩极细的缝
+    var sx = width / cols, sy = height / rows;
+
+    var pieces = [];
+    for (var i = 0; i < regions.length; i++) {
+      var rg = regions[i];
+      if (rg.count < minPixels) continue;
+      var rings = traceRings(lab, cols, rows, rg.id);
+      if (!rings.length) continue;
+
+      var conv = [];
+      for (var r = 0; r < rings.length; r++) {
+        var simple = simplify(rings[r], tol);
+        simple = simplify(simple, tol * 2); // 第二遍抹掉切缝扩张产生的 1px 台阶/缺口
+        if (simple.length < 3) continue;
+        var ring = new Array(simple.length);
+        for (var j = 0; j < simple.length; j++) ring[j] = [simple[j][0] * sx, simple[j][1] * sy];
+        if (Math.abs(area(ring)) < 0.5) continue;
+        conv.push(ring);
+      }
+      if (!conv.length) continue;
+
+      // 最大环是外轮廓，其余是洞（环内挖空）
+      conv.sort(function (a, b) { return Math.abs(area(b)) - Math.abs(area(a)); });
+      var outer = conv[0];
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (var m = 0; m < outer.length; m++) {
+        var p = outer[m];
+        if (p[0] < minX) minX = p[0];
+        if (p[0] > maxX) maxX = p[0];
+        if (p[1] < minY) minY = p[1];
+        if (p[1] > maxY) maxY = p[1];
+      }
+      pieces.push({
+        rings: conv,
+        bbox: { minX: minX, minY: minY, maxX: maxX, maxY: maxY },
+        area: Math.abs(area(outer)),
+        pixels: rg.count,
+        holes: conv.length - 1,
+      });
+    }
+
+    // 阅读顺序：先按行分带，再按列
+    pieces.sort(function (a, b) {
+      var ah = a.bbox.maxY - a.bbox.minY, bh = b.bbox.maxY - b.bbox.minY;
+      var bandTol = Math.min(ah, bh) * 0.5;
+      if (Math.abs(a.bbox.minY - b.bbox.minY) > bandTol) return a.bbox.minY - b.bbox.minY;
+      return a.bbox.minX - b.bbox.minX;
+    });
+
+    return pieces;
+  }
+
+  return {
+    computePieces: computePieces,
+    rasterize: rasterize,
+    labelRegions: labelRegions,
+    growKerf: growKerf,
+    traceRings: traceRings,
+    simplify: simplify,
+    area: area,
+  };
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = CutEngine;
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var SVGNS = 'http://www.w3.org/2000/svg';
+
+  /* ------------------------------------------------------------------ 状态 */
+  var src = null;      // { name, minX, minY, w, h, innerMarkup, attrs, text }
+  var cuts = [];       // { id, type:'vline'|'hline'|'free', pos, pts }
+  var mode = 'vline';
+  var drawing = null;  // { pts: [[x,y], …] }
+  var drag = null;     // { id, i }
+  var pieces = [];
+  var uid = 1;
+
+  var stage = $('stage'), art = $('art'), overlay = $('overlay'), emptyTip = $('emptyTip');
+  var cutList = $('cutList'), results = $('results'), stat = $('stat');
+  var precisionSel = $('precision');
+
+  var HINTS = {
+    vline: '点击画布添加竖向切割线，拖圆点可移动',
+    hline: '点击画布添加横向切割线，拖圆点可移动',
+    free: '连续点击落点画折线，双击或回车结束；Esc 取消',
+  };
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function n2(v) { return Math.round(v * 100) / 100; }
+
+  var toastEl = $('toast'), toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 1800);
+  }
+
+  /* -------------------------------------------------------------- 载入源图 */
+  function loadSourceText(text, name) {
+    var doc;
+    try {
+      doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+    } catch (e) {
+      return fail('这个文件解析不了：' + e.message);
+    }
+    if (doc.getElementsByTagName('parsererror').length) return fail('SVG 解析失败（XML 不合法）');
+    var root = doc.documentElement;
+    if (!root || root.nodeName.toLowerCase() !== 'svg') return fail('根节点不是 <svg>');
+
+    var minX = 0, minY = 0, w, h;
+    var vb = root.getAttribute('viewBox');
+    if (vb) {
+      var nums = vb.trim().split(/[\s,]+/).map(Number);
+      if (nums.length === 4 && nums.every(function (n) { return isFinite(n); })) {
+        minX = nums[0]; minY = nums[1]; w = nums[2]; h = nums[3];
+      }
+    }
+    if (!(w > 0 && h > 0)) {
+      w = parseFloat(root.getAttribute('width')) || 600;
+      h = parseFloat(root.getAttribute('height')) || 600;
+      minX = 0; minY = 0;
+    }
+
+    // 保留根节点上的呈现属性（fill / style / transform / class …），丢掉几何与命名空间
+    var drop = { viewBox: 1, width: 1, height: 1, x: 1, y: 1, version: 1, id: 1, xmlns: 1, 'xmlns:xlink': 1, preserveAspectRatio: 1 };
+    var attrs = '';
+    for (var i = 0; i < root.attributes.length; i++) {
+      var a = root.attributes[i];
+      if (drop[a.name]) continue;
+      attrs += ' ' + a.name + '="' + String(a.value).replace(/"/g, '&quot;') + '"';
+    }
+
+    var inner = '';
+    for (var c = 0; c < root.childNodes.length; c++) {
+      inner += new XMLSerializer().serializeToString(root.childNodes[c]);
+    }
+
+    src = { name: name || 'source.svg', minX: minX, minY: minY, w: w, h: h, innerMarkup: inner, attrs: attrs, text: text };
+    cuts = [];
+    drawing = null;
+    pieces = [];
+    results.innerHTML = '<div class="empty-res">还没有碎片。</div>';
+    stat.textContent = '切割后在这里预览，每块都能单独导出';
+    $('btnZip').disabled = true;
+    $('btnKnife').disabled = true;
+
+    renderArt();
+    renderOverlay();
+    renderList();
+    $('srcName').textContent = src.name + ' · ' + n2(w) + '×' + n2(h);
+    $('metaSize').textContent = n2(w) + ' × ' + n2(h);
+    $('metaOrigin').textContent = '(' + n2(minX) + ', ' + n2(minY) + ')';
+    return true;
+  }
+
+  function fail(msg) { toast(msg); return false; }
+
+  function renderArt() {
+    art.innerHTML = src ? src.text : '';
+    emptyTip.style.display = src ? 'none' : 'block';
+    stage.classList.toggle('empty', !src);
+    if (!src) { overlay.removeAttribute('viewBox'); overlay.innerHTML = ''; return; }
+    stage.style.aspectRatio = src.w + ' / ' + src.h;
+    overlay.setAttribute('viewBox', src.minX + ' ' + src.minY + ' ' + src.w + ' ' + src.h);
+  }
+
+  /* ---------------------------------------------------------- 画布 / 切割线 */
+  function toUser(ev) {
+    var r = overlay.getBoundingClientRect();
+    return [
+      src.minX + ((ev.clientX - r.left) / r.width) * src.w,
+      src.minY + ((ev.clientY - r.top) / r.height) * src.h,
+    ];
+  }
+
+  function strokeW() { return Math.max(src.w, src.h) * 0.006; }
+  function dotR() { return Math.max(src.w, src.h) * 0.014; }
+
+  function renderOverlay() {
+    if (!src) return;
+    var sw = strokeW(), r = dotR();
+    var out = [];
+    for (var i = 0; i < cuts.length; i++) {
+      var c = cuts[i];
+      if (c.type === 'vline') {
+        out.push('<line class="cl" x1="' + c.pos + '" y1="' + src.minY + '" x2="' + c.pos + '" y2="' + (src.minY + src.h) + '" />');
+        out.push(handle(c.pos, src.minY + src.h / 2, c.id, null, r));
+      } else if (c.type === 'hline') {
+        out.push('<line class="cl" x1="' + src.minX + '" y1="' + c.pos + '" x2="' + (src.minX + src.w) + '" y2="' + c.pos + '" />');
+        out.push(handle(src.minX + src.w / 2, c.pos, c.id, null, r));
+      } else {
+        var pts = c.pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+        out.push('<polyline class="cl" points="' + pts + '" />');
+        for (var j = 0; j < c.pts.length; j++) {
+          out.push(handle(c.pts[j][0], c.pts[j][1], c.id, j, r * 0.8));
+        }
+      }
+    }
+    if (drawing) {
+      var dp = drawing.pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+      out.push('<polyline class="cl drawing" points="' + dp + '" />');
+      for (var q = 0; q < drawing.pts.length; q++) {
+        out.push('<circle class="dot-draw" cx="' + drawing.pts[q][0] + '" cy="' + drawing.pts[q][1] + '" r="' + (r * 0.7) + '" />');
+      }
+    }
+    overlay.innerHTML = '<defs><style>' +
+      '.cl{fill:none;stroke:#5eead4;stroke-width:' + n2(sw) + ';stroke-dasharray:' + n2(sw * 2.6) + ' ' + n2(sw * 1.8) + ';stroke-linecap:round;filter:drop-shadow(0 0 ' + n2(sw) + ' rgba(0,0,0,.75));}' +
+      '.cl.drawing{stroke:#a5b4fc;}' +
+      '.handle{cursor:grab;fill:#5eead4;stroke:#04231f;stroke-width:' + n2(sw * 0.7) + ';}' +
+      '.handle:hover{fill:#99f6e4;}' +
+      '.dot-draw{fill:#a5b4fc;stroke:#0b1220;stroke-width:' + n2(sw * 0.6) + ';}' +
+      '.hit{fill:transparent;cursor:grab;}' +
+      '</style></defs>' + out.join('');
+    $('metaCuts').textContent = String(cuts.length);
+  }
+
+  function handle(x, y, id, i, r) {
+    return '<circle class="hit" cx="' + n2(x) + '" cy="' + n2(y) + '" r="' + n2(r * 2.2) + '" data-cut="' + id + '"' +
+      (i == null ? '' : ' data-i="' + i + '"') + '/>' +
+      '<circle class="handle" cx="' + n2(x) + '" cy="' + n2(y) + '" r="' + n2(r) + '" data-cut="' + id + '"' +
+      (i == null ? '' : ' data-i="' + i + '"') + ' pointer-events="none"/>';
+  }
+
+  function renderList() {
+    if (!cuts.length) {
+      cutList.innerHTML = '<li class="none">还没有切割线</li>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < cuts.length; i++) {
+      var c = cuts[i], label;
+      if (c.type === 'vline') label = '竖线 x = ' + n2(c.pos - src.minX) + '（' + Math.round((c.pos - src.minX) / src.w * 100) + '%）';
+      else if (c.type === 'hline') label = '横线 y = ' + n2(c.pos - src.minY) + '（' + Math.round((c.pos - src.minY) / src.h * 100) + '%）';
+      else label = '折线 ' + c.pts.length + ' 点';
+      html += '<li><span class="tag">' + (i + 1) + '</span><span class="name">' + label +
+        '</span><button data-del="' + c.id + '" title="删除这条">✕</button></li>';
+    }
+    cutList.innerHTML = html;
+  }
+
+  /* ------------------------------------------------------------ 交互：加线 */
+  function addFullLine(kind, pt) {
+    var c;
+    if (kind === 'vline') c = { id: uid++, type: 'vline', pos: clamp(pt[0], src.minX, src.minX + src.w) };
+    else c = { id: uid++, type: 'hline', pos: clamp(pt[1], src.minY, src.minY + src.h) };
+    cuts.push(c);
+    renderOverlay(); renderList();
+  }
+
+  function addFreePoint(pt) {
+    if (!drawing) drawing = { pts: [] };
+    drawing.pts.push([clamp(pt[0], src.minX, src.minX + src.w), clamp(pt[1], src.minY, src.minY + src.h)]);
+    renderOverlay();
+  }
+
+  function finishFree() {
+    if (!drawing) return;
+    var pts = drawing.pts.slice();
+    // 双击会在同一位置多落一个点，去掉
+    while (pts.length > 1) {
+      var a = pts[pts.length - 1], b = pts[pts.length - 2];
+      if (Math.hypot(a[0] - b[0], a[1] - b[1]) < Math.max(src.w, src.h) * 0.02) pts.pop();
+      else break;
+    }
+    drawing = null;
+    if (pts.length >= 2) {
+      cuts.push({ id: uid++, type: 'free', pts: pts });
+      renderList();
+    } else {
+      toast('折线至少需要两个点');
+    }
+    renderOverlay();
+  }
+
+  overlay.addEventListener('pointerdown', function (ev) {
+    if (!src) return;
+    var t = ev.target;
+    var cutId = t.getAttribute && t.getAttribute('data-cut');
+    if (cutId != null) {
+      var idx = t.getAttribute('data-i');
+      drag = { id: +cutId, i: idx == null ? null : +idx };
+      try { overlay.setPointerCapture(ev.pointerId); } catch (e) {}
+      ev.preventDefault();
+      return;
+    }
+    if (mode === 'free') addFreePoint(toUser(ev));
+    else addFullLine(mode, toUser(ev));
+  });
+
+  overlay.addEventListener('pointermove', function (ev) {
+    if (!drag || !src) return;
+    var cut = null;
+    for (var i = 0; i < cuts.length; i++) if (cuts[i].id === drag.id) { cut = cuts[i]; break; }
+    if (!cut) return;
+    var pt = toUser(ev);
+    if (cut.type === 'vline') cut.pos = clamp(pt[0], src.minX, src.minX + src.w);
+    else if (cut.type === 'hline') cut.pos = clamp(pt[1], src.minY, src.minY + src.h);
+    else if (drag.i != null && cut.pts[drag.i]) {
+      cut.pts[drag.i] = [clamp(pt[0], src.minX, src.minX + src.w), clamp(pt[1], src.minY, src.minY + src.h)];
+    }
+    renderOverlay(); renderList();
+  });
+
+  function endDrag() { drag = null; }
+  overlay.addEventListener('pointerup', endDrag);
+  overlay.addEventListener('pointercancel', endDrag);
+
+  overlay.addEventListener('dblclick', function () {
+    if (mode === 'free' && drawing) finishFree();
+  });
+
+  // 画布尺寸变化时不需要重算（坐标全是用户单位），但空态提示需复位
+  window.addEventListener('resize', function () { if (src) renderOverlay(); });
+
+  /* ------------------------------------------------------------- 面板事件 */
+  $('modeSeg').addEventListener('click', function (ev) {
+    var b = ev.target.closest('button[data-mode]');
+    if (!b) return;
+    if (drawing) { drawing = null; renderOverlay(); }
+    mode = b.getAttribute('data-mode');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) {
+      x.classList.toggle('on', x === b);
+    });
+    $('hint').textContent = HINTS[mode];
+  });
+
+  $('btnUndo').addEventListener('click', function () {
+    if (!src) return;
+    if (drawing) { drawing = null; renderOverlay(); return; }
+    if (!cuts.length) return toast('没有可撤销的切割线');
+    cuts.pop(); renderOverlay(); renderList();
+  });
+
+  $('btnClearCuts').addEventListener('click', function () {
+    if (!src) return;
+    cuts = []; drawing = null; renderOverlay(); renderList();
+  });
+
+  cutList.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button[data-del]');
+    if (!b) return;
+    var id = +b.getAttribute('data-del');
+    cuts = cuts.filter(function (c) { return c.id !== id; });
+    renderOverlay(); renderList();
+  });
+
+  $('btnGrid').addEventListener('click', function () {
+    if (!src) return toast('先载入一张 SVG');
+    var cols = clamp(parseInt($('gCols').value, 10) || 1, 1, 30);
+    var rows = clamp(parseInt($('gRows').value, 10) || 1, 1, 30);
+    var jit = clamp(parseFloat($('gJit').value) || 0, 0, 10) / 100;
+    cuts = [];
+    var i, off;
+    for (i = 1; i < cols; i++) {
+      off = (Math.random() * 2 - 1) * jit * (src.w / cols) / 2;
+      cuts.push({ id: uid++, type: 'vline', pos: src.minX + src.w * (i / cols) + off });
+    }
+    for (i = 1; i < rows; i++) {
+      off = (Math.random() * 2 - 1) * jit * (src.h / rows) / 2;
+      cuts.push({ id: uid++, type: 'hline', pos: src.minY + src.h * (i / rows) + off });
+    }
+    renderOverlay(); renderList();
+    toast('生成 ' + (cols - 1 + rows - 1) + ' 条切割线');
+  });
+
+  $('fileInput').addEventListener('change', function (ev) {
+    var f = ev.target.files && ev.target.files[0];
+    if (f) readFile(f);
+    ev.target.value = '';
+  });
+
+  function readFile(file) {
+    var fr = new FileReader();
+    fr.onload = function () { loadSourceText(String(fr.result), file.name); };
+    fr.onerror = function () { toast('读取文件失败'); };
+    fr.readAsText(file);
+  }
+
+  $('btnPaste').addEventListener('click', function () {
+    var text = $('pasteBox').value.trim();
+    if (!text) return toast('粘贴框是空的');
+    if (loadSourceText(text, 'pasted.svg')) toast('已载入');
+  });
+
+  $('btnDemo').addEventListener('click', function () {
+    if (loadSourceText(DEMO_SVG, 'demo.svg')) toast('已载入示例图');
+  });
+
+  // 拖拽
+  ['dragenter', 'dragover'].forEach(function (t) {
+    stage.addEventListener(t, function (e) { e.preventDefault(); stage.style.borderColor = '#5eead4'; });
+  });
+  ['dragleave', 'drop'].forEach(function (t) {
+    stage.addEventListener(t, function (e) { e.preventDefault(); stage.style.borderColor = ''; });
+  });
+  stage.addEventListener('drop', function (e) {
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) readFile(f);
+  });
+  document.addEventListener('dragover', function (e) { e.preventDefault(); });
+  document.addEventListener('drop', function (e) { e.preventDefault(); });
+
+  // 快捷键
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key.toLowerCase();
+    if (k === 'escape') { drawing = null; renderOverlay(); }
+    else if (k === 'enter') { if (drawing) finishFree(); }
+    else if (k === 'v') { clickMode('vline'); }
+    else if (k === 'h') { clickMode('hline'); }
+    else if (k === 'f') { clickMode('free'); }
+    else if ((e.key === 'Backspace' || e.key === 'Delete') ) { e.preventDefault(); $('btnUndo').click(); }
+  });
+
+  function clickMode(m) {
+    var b = document.querySelector('#modeSeg button[data-mode="' + m + '"]');
+    if (b) b.click();
+  }
+
+  /* -------------------------------------------------------------- 切割主体 */
+  function localCuts() {
+    var out = [];
+    for (var i = 0; i < cuts.length; i++) {
+      var c = cuts[i], poly = [];
+      if (c.type === 'vline') {
+        poly = [[c.pos - src.minX, -1], [c.pos - src.minX, src.h + 1]];
+      } else if (c.type === 'hline') {
+        poly = [[-1, c.pos - src.minY], [src.w + 1, c.pos - src.minY]];
+      } else {
+        poly = c.pts.map(function (p) { return [p[0] - src.minX, p[1] - src.minY]; });
+      }
+      if (poly.length > 1) out.push(poly);
+    }
+    return out;
+  }
+
+  function pieceSvg(piece, index) {
+    var d = piece.rings.map(function (ring) {
+      var s = 'M ' + n2(ring[0][0] + src.minX) + ' ' + n2(ring[0][1] + src.minY);
+      for (var i = 1; i < ring.length; i++) s += ' L ' + n2(ring[i][0] + src.minX) + ' ' + n2(ring[i][1] + src.minY);
+      return s + ' Z';
+    }).join(' ');
+
+    var bb = piece.bbox;
+    var bx = bb.minX + src.minX, by = bb.minY + src.minY;
+    var bw = Math.max(bb.maxX - bb.minX, 0.01), bh = Math.max(bb.maxY - bb.minY, 0.01);
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
+      ' viewBox="' + n2(bx) + ' ' + n2(by) + ' ' + n2(bw) + ' ' + n2(bh) + '"' +
+      ' width="' + n2(bw) + '" height="' + n2(bh) + '">' +
+      '<defs><clipPath id="clip-' + index + '" clipPathUnits="userSpaceOnUse">' +
+      '<path d="' + d + '" clip-rule="evenodd"/></clipPath></defs>' +
+      '<g clip-path="url(#clip-' + index + ')"' + src.attrs + '>' + src.innerMarkup + '</g>' +
+      '</svg>';
+  }
+
+  function runCut() {
+    if (!src) return toast('先载入一张 SVG');
+    var res = parseInt(precisionSel.value, 10) || 1400;
+    var t0 = performance.now();
+    var raw;
+    try {
+      raw = CutEngine.computePieces({ width: src.w, height: src.h, cuts: localCuts(), res: res });
+    } catch (err) {
+      return toast('切割失败：' + err.message);
+    }
+    var ms = Math.round(performance.now() - t0);
+
+    pieces = raw.map(function (p, i) {
+      var svg = pieceSvg(p, i + 1);
+      return {
+        index: i + 1,
+        rings: p.rings,
+        bbox: p.bbox,
+        area: p.area,
+        holes: p.holes,
+        svg: svg,
+        w: Math.max(p.bbox.maxX - p.bbox.minX, 0),
+        h: Math.max(p.bbox.maxY - p.bbox.minY, 0),
+      };
+    });
+
+    renderResults(ms);
+    $('btnZip').disabled = !pieces.length;
+    $('btnKnife').disabled = !pieces.length;
+    if (pieces.length <= 1) toast('只有 1 块——切割线没有把画面分开？');
+    else toast('切出 ' + pieces.length + ' 块（' + ms + ' ms）');
+  }
+
+  function renderResults(ms) {
+    if (!pieces.length) {
+      results.innerHTML = '<div class="empty-res">没有切出任何块。</div>';
+      stat.textContent = '切割后在这里预览，每块都能单独导出';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < pieces.length; i++) {
+      var p = pieces[i];
+      var url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(p.svg);
+      html += '<div class="piece">' +
+        '<button class="dl" data-dl="' + i + '" title="下载这块 SVG">⤓</button>' +
+        '<img src="' + url + '" alt="碎片 ' + p.index + '" />' +
+        '<span class="cap">#' + p.index + ' · ' + Math.round(p.w) + '×' + Math.round(p.h) +
+        (p.holes ? ' · ' + p.holes + '洞' : '') + '</span>' +
+        '</div>';
+    }
+    results.innerHTML = html;
+    var total = pieces.reduce(function (s, p) { return s + p.area; }, 0);
+    stat.textContent = pieces.length + ' 块 · 覆盖率 ' + (total / (src.w * src.h) * 100).toFixed(1) + '%' +
+      (ms != null ? ' · ' + ms + ' ms' : '');
+  }
+
+  results.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button[data-dl]');
+    if (!b) return;
+    var p = pieces[+b.getAttribute('data-dl')];
+    if (p) download('piece-' + String(p.index).padStart(2, '0') + '.svg', p.svg);
+  });
+
+  /* ---------------------------------------------------------------- 导出 */
+  function download(name, text, mime) {
+    var blob = new Blob([text], { type: mime || 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  /* ------- store-only ZIP（无压缩，纯前端，无依赖） ------- */
+  var crcTable = (function () {
+    var t = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+
+  function crc32(bytes) {
+    var c = 0xFFFFFFFF;
+    for (var i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function makeZip(files) {
+    var enc = new TextEncoder();
+    var now = new Date();
+    var dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+    var dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+    var chunks = [], central = [], offset = 0;
+
+    for (var i = 0; i < files.length; i++) {
+      var nameBytes = enc.encode(files[i].name);
+      var data = enc.encode(files[i].text);
+      var crc = crc32(data);
+
+      var lh = new Uint8Array(30 + nameBytes.length);
+      var lv = new DataView(lh.buffer);
+      lv.setUint32(0, 0x04034b50, true);
+      lv.setUint16(4, 20, true);
+      lv.setUint16(6, 0x0800, true);   // UTF-8 文件名
+      lv.setUint16(8, 0, true);        // store
+      lv.setUint16(10, dosTime, true);
+      lv.setUint16(12, dosDate, true);
+      lv.setUint32(14, crc, true);
+      lv.setUint32(18, data.length, true);
+      lv.setUint32(22, data.length, true);
+      lv.setUint16(26, nameBytes.length, true);
+      lv.setUint16(28, 0, true);
+      lh.set(nameBytes, 30);
+      chunks.push(lh, data);
+
+      var ch = new Uint8Array(46 + nameBytes.length);
+      var cv = new DataView(ch.buffer);
+      cv.setUint32(0, 0x02014b50, true);
+      cv.setUint16(4, 20, true);
+      cv.setUint16(6, 20, true);
+      cv.setUint16(8, 0x0800, true);
+      cv.setUint16(10, 0, true);
+      cv.setUint16(12, dosTime, true);
+      cv.setUint16(14, dosDate, true);
+      cv.setUint32(16, crc, true);
+      cv.setUint32(20, data.length, true);
+      cv.setUint32(24, data.length, true);
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint32(42, offset, true);
+      ch.set(nameBytes, 46);
+      central.push(ch);
+
+      offset += lh.length + data.length;
+    }
+
+    var centralSize = central.reduce(function (s, c) { return s + c.length; }, 0);
+    var end = new Uint8Array(22);
+    var ev = new DataView(end.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, files.length, true);
+    ev.setUint16(10, files.length, true);
+    ev.setUint32(12, centralSize, true);
+    ev.setUint32(16, offset, true);
+
+    var all = chunks.concat(central, [end]);
+    return new Blob(all, { type: 'application/zip' });
+  }
+
+  $('btnZip').addEventListener('click', function () {
+    if (!pieces.length) return;
+    var files = pieces.map(function (p) {
+      return { name: 'piece-' + String(p.index).padStart(2, '0') + '.svg', text: p.svg };
+    });
+    files.push({ name: 'knife-lines.svg', text: knifeSvg() });
+    var blob = makeZip(files);
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'pieces-' + pieces.length + '.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 8000);
+    toast('打包 ' + pieces.length + ' 块 + 刀模线');
+  });
+
+  /* 刀模线：只含切割轨迹的细线 SVG，可直接给激光/CNC/绘图仪用 */
+  function knifeSvg() {
+    var sw = Math.max(src.w, src.h) * 0.001;
+    var paths = cuts.map(function (c) {
+      var poly = c.type === 'vline'
+        ? [[c.pos, src.minY], [c.pos, src.minY + src.h]]
+        : c.type === 'hline'
+          ? [[src.minX, c.pos], [src.minX + src.w, c.pos]]
+          : c.pts;
+      return '<polyline points="' + poly.map(function (p) { return n2(p[0]) + ',' + n2(p[1]); }).join(' ') + '"/>';
+    }).join('');
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + n2(src.minX) + ' ' + n2(src.minY) + ' ' + n2(src.w) + ' ' + n2(src.h) +
+      '" width="' + n2(src.w) + '" height="' + n2(src.h) + '">' +
+      '<g fill="none" stroke="#000" stroke-width="' + n2(sw) + '" vector-effect="non-scaling-stroke">' +
+      '<rect x="' + n2(src.minX) + '" y="' + n2(src.minY) + '" width="' + n2(src.w) + '" height="' + n2(src.h) + '"/>' +
+      paths + '</g></svg>';
+  }
+
+  $('btnKnife').addEventListener('click', function () {
+    if (!src) return;
+    download('knife-lines.svg', knifeSvg());
+    toast('已导出刀模线（切割轨迹）');
+  });
+
+  $('btnCut').addEventListener('click', runCut);
+
+  /* ---------------------------------------------------------------- 示例图 */
+  var DEMO_SVG = [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">',
+    '<defs>',
+    '<linearGradient id="dg" x1="0" y1="0" x2="1" y2="1">',
+    '<stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#a855f7"/></linearGradient>',
+    '<radialGradient id="dr"><stop offset="0" stop-color="#fde68a"/><stop offset="1" stop-color="#f59e0b" stop-opacity="0"/></radialGradient>',
+    '</defs>',
+    '<rect width="600" height="600" fill="url(#dg)"/>',
+    '<circle cx="190" cy="215" r="145" fill="#0b1120" opacity="0.32"/>',
+    '<circle cx="405" cy="335" r="185" fill="url(#dr)"/>',
+    '<path d="M0 470 Q 150 370 300 470 T 600 470 V600 H0 Z" fill="#0b1120" opacity="0.5"/>',
+    '<g fill="none" stroke="#e2e8f0" stroke-opacity="0.42" stroke-width="2">',
+    '<circle cx="300" cy="300" r="255"/><circle cx="300" cy="300" r="196"/></g>',
+    '<g fill="#f8fafc" fill-opacity="0.85">',
+    '<circle cx="300" cy="120" r="9"/><circle cx="120" cy="300" r="6"/><circle cx="482" cy="300" r="6"/>',
+    '</g>',
+    '</svg>'
+  ].join('');
+
+  /* ------------------------------------------------------------ 自检（可选） */
+  function selftest() {
+    var rep = $('report');
+    var lines = [], ok = true;
+    function check(name, cond, extra) {
+      if (!cond) ok = false;
+      lines.push((cond ? 'PASS ' : 'FAIL ') + name + (extra ? '  → ' + extra : ''));
+    }
+
+    // 1) 示例图能载入
+    var loaded = loadSourceText(DEMO_SVG, 'demo.svg');
+    check('载入示例 SVG', loaded === true && src && src.w === 600 && src.h === 600);
+
+    // 2) 无切割线 → 1 块，覆盖整幅
+    cuts = [];
+    pieces = CutEngine.computePieces({ width: src.w, height: src.h, cuts: [], res: 900 });
+    check('无切割线 = 1 块', pieces.length === 1, 'pieces=' + pieces.length);
+    if (pieces.length === 1) {
+      var a = pieces[0].area, ratio = a / (src.w * src.h);
+      check('整块覆盖率 ≈ 1', ratio > 0.985 && ratio <= 1.005, 'ratio=' + ratio.toFixed(4));
+      check('整块 4 个角', pieces[0].rings[0].length >= 4 && pieces[0].rings[0].length <= 6, 'pts=' + pieces[0].rings[0].length);
+    }
+
+    // 3) 一条竖线 → 2 块，左右各半
+    cuts = [{ id: 1, type: 'vline', pos: src.minX + src.w / 2 }];
+    pieces = CutEngine.computePieces({ width: src.w, height: src.h, cuts: localCuts(), res: 900 });
+    check('一条竖线 = 2 块', pieces.length === 2, 'pieces=' + pieces.length);
+    if (pieces.length === 2) {
+      var r0 = pieces[0].area / (src.w * src.h), r1 = pieces[1].area / (src.w * src.h);
+      check('左右各占 ~50%', Math.abs(r0 - 0.5) < 0.02 && Math.abs(r1 - 0.5) < 0.02,
+        r0.toFixed(3) + ' / ' + r1.toFixed(3));
+    }
+
+    // 4) 3×3 网格 → 9 块，覆盖率 ≈ 1
+    cuts = [];
+    for (var i = 1; i < 3; i++) cuts.push({ id: 100 + i, type: 'vline', pos: src.minX + src.w * i / 3 });
+    for (var j = 1; j < 3; j++) cuts.push({ id: 200 + j, type: 'hline', pos: src.minY + src.h * j / 3 });
+    pieces = CutEngine.computePieces({ width: src.w, height: src.h, cuts: localCuts(), res: 900 });
+    check('3×3 网格 = 9 块', pieces.length === 9, 'pieces=' + pieces.length);
+    var cov = pieces.reduce(function (s, p) { return s + p.area; }, 0) / (src.w * src.h);
+    check('9 块覆盖率 > 0.95', cov > 0.95 && cov <= 1.01, 'cov=' + cov.toFixed(4));
+    var even = pieces.every(function (p) { return Math.abs(p.area / (src.w * src.h) - 1 / 9) < 0.03; });
+    check('9 块大小均匀', even);
+
+    // 5) 斜线（45°）→ 2 块（检验对角线不出锯齿/漏缝）
+    cuts = [{ id: 300, type: 'free', pts: [[src.minX, src.minY], [src.minX + src.w, src.minY + src.h]] }];
+    var diag = CutEngine.computePieces({ width: src.w, height: src.h, cuts: localCuts(), res: 900 });
+    check('对角斜线 = 2 块', diag.length === 2, 'pieces=' + diag.length);
+    if (diag.length === 2) {
+      var d0 = diag[0].area / (src.w * src.h);
+      check('斜切两块各 ~50%', Math.abs(d0 - 0.5) < 0.03, d0.toFixed(3));
+    }
+
+    // 6) 每块 SVG 良构 + 有 clipPath
+    var svgOk = true, badReason = '';
+    for (var q = 0; q < pieces.length; q++) {
+      var s = pieceSvg(pieces[q], q + 1);
+      var d2 = new DOMParser().parseFromString(s, 'image/svg+xml');
+      if (d2.getElementsByTagName('parsererror').length) { svgOk = false; badReason = 'piece ' + (q + 1) + ' 不是良构 XML'; break; }
+      if (!d2.getElementsByTagName('clipPath').length) { svgOk = false; badReason = 'piece ' + (q + 1) + ' 缺 clipPath'; break; }
+      if (!/viewBox="-?[\d.]+ -?[\d.]+ [\d.]+ [\d.]+"/.test(s)) { svgOk = false; badReason = 'piece ' + (q + 1) + ' viewBox 异常'; break; }
+    }
+    check('碎片 SVG 良构（' + pieces.length + ' 块）', svgOk, badReason);
+
+    // 7) ZIP 是合法 zip（PK\x03\x04 头 + 中央目录）
+    var zipBlob = makeZip([{ name: 'a.svg', text: '<svg/>' }]);
+    check('ZIP 打包', zipBlob.size > 60 && zipBlob.type === 'application/zip', 'size=' + zipBlob.size);
+
+    // 8) 刀模线 SVG 良构
+    cuts = [{ id: 400, type: 'vline', pos: src.minX + src.w / 2 }];
+    var kd = new DOMParser().parseFromString(knifeSvg(), 'image/svg+xml');
+    check('刀模线 SVG 良构', !kd.getElementsByTagName('parsererror').length && kd.getElementsByTagName('polyline').length === 1);
+
+    lines.push('');
+    lines.push(ok ? 'SELFTEST OK' : 'SELFTEST FAILED');
+    rep.textContent = lines.join('\n');
+    rep.className = ok ? 'ok' : 'fail';
+    document.title = (ok ? 'SELFTEST OK' : 'SELFTEST FAILED');
+    window.__selftest = { ok: ok, lines: lines };
+  }
+
+  /* ------------------------------------------------------------------ 启动 */
+  if (/[?&]selftest=1/.test(location.search)) {
+    selftest();
+  } else {
+    $('hint').textContent = HINTS[mode];
+    loadSourceText(DEMO_SVG, 'demo.svg'); // 首屏直接给一张示例图，拖自己的文件即可替换
+  }
+})();
+</script>
+</body>
+</html>
