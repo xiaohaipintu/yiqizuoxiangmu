@@ -322,6 +322,16 @@
   }
 
   /* ---------------- 5) 打乱 ---------------- */
+  function randPerm(n) {
+    var a = [];
+    for (var i = 0; i < n; i++) a.push(i);
+    for (var j = a.length - 1; j > 0; j--) {
+      var k = Math.floor(Math.random() * (j + 1));
+      var t = a[j]; a[j] = a[k]; a[k] = t;
+    }
+    return a;
+  }
+
   function shuffleOrder() {
     var order = [];
     for (var i = 0; i < N * N; i++) order.push(i);
@@ -394,7 +404,16 @@
   /* ---------------- 7) 主流程 ---------------- */
   function run() {
     state.source = makeImage();
-    state.tiles = sliceTiles(state.source);
+
+    // ★ 关键：切出来的 9 块先「随机重新编号」再交给求解器。
+    //   raw[i] 是原图第 i 格的像素；perm[t] 记录「编号 t 这块来自原图第几格」。
+    //   求解器只拿到 state.tiles（= raw[perm[t]]）的边缘像素，**拿不到 perm**，
+    //   所以它不可能靠"下标顺序"抄答案 —— 输出的 0..8 是它自己算出来的排列。
+    var raw = sliceTiles(state.source);
+    var perm = randPerm(N * N);
+    state.perm = perm;
+    state.tiles = perm.map(function (p) { return raw[p]; });
+
     state.order = shuffleOrder();
 
     var res = solveByTexture(state.tiles);
@@ -403,13 +422,12 @@
     drawBoard(cvShuffled, state.order, null);
     drawBoard(cvSolved, res.order, res.seams);
 
-    tagShuffled.textContent = '块序 ' + state.order.join(',');
+    tagShuffled.textContent = '打乱排列 ' + state.order.join(',');
     tagSolved.textContent = res.ms.toFixed(1) + ' ms';
 
-    // 判定：因为图是我们自己生成的，正确顺序就是 0..8
-    var identity = [];
-    for (var i = 0; i < N * N; i++) identity.push(i);
-    var right = res.order.every(function (v, i) { return v === identity[i]; });
+    // 判定：把求解结果经 perm 映射回原图格号，看是否每个位置都回到了它原本的格子。
+    // 注意这一步只用于「打分」，求解过程中完全没用到 perm。
+    var right = res.order.every(function (tileId, k) { return perm[tileId] === k; });
 
     // 正确配对的接缝代价 vs 全部可能边对的平均代价 —— 差距越大越"确信"
     var seamCosts = res.seams.map(function (s) { return s.cost; });
@@ -426,8 +444,10 @@
     var lines = [];
     lines.push('原图 ' + SIZE + '×' + SIZE + ' → 切成 ' + N + '×' + N +
                '，每块 ' + TILE + '×' + TILE);
-    lines.push('搜索：' + res.ms.toFixed(1) + ' ms（分支限界，遍历所有不冲突排列）');
-    lines.push('拼合结果：' + (right ? '✓ 与原图完全一致（0..8）' : '✗ 顺序不对：' + res.order.join(',')));
+    lines.push('块编号：求解前已随机重排（' + perm.join(',') + '），与它在原图的格号无关');
+    lines.push('求解器输入：9 组边缘像素（L/R/T/B）+ 分支限界搜索，没有传入任何位置信息');
+    lines.push('搜索：' + res.ms.toFixed(1) + ' ms');
+    lines.push('映射回原图格号后：' + (right ? '✓ 每块都回到了它原本的格子' : '✗ 有块错位（见下方排列）'));
     lines.push('');
     lines.push('总接缝代价 ' + res.cost.toFixed(2) + '，平均每条缝 ' + avgSeam.toFixed(2));
     lines.push('对照：任意两块硬拼的代价中位数 ' + medianAll.toFixed(2) +
