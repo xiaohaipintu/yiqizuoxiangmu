@@ -1,0 +1,31 @@
+{
+  "pieces": 4,
+  "vertices": [
+    4,
+    4,
+    4,
+    5
+  ],
+  "results": {
+    "纯形状": {
+      "seam": 0.08507816818526343,
+      "gap_pct": 15.85,
+      "overlap_pct": 0.0,
+      "holes_pct": 0.0,
+      "rect_fill_pct": 69.2,
+      "seams": 0,
+      "mismatch_pct": 0.0,
+      "file": "2_拼合结果_纯形状.jpg"
+    },
+    "形状+纹理": {
+      "seam": 0.38241827774358883,
+      "gap_pct": 10.8,
+      "overlap_pct": 0.0,
+      "holes_pct": 0.0,
+      "rect_fill_pct": 72.9,
+      "seams": 1,
+      "mismatch_pct": 0.0,
+      "file": "2_拼合结果_形状加纹理.jpg"
+    }
+  }
+}

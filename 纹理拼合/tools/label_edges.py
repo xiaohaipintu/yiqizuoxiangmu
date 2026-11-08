@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import json
 import sys
 from pathlib import Path
 
@@ -65,7 +66,6 @@ def main() -> int:
 
     if args.solution:
         # 在拼合结果上标注：用解里的世界位姿，把每块的边画在成品图上
-        import json
         from handmade_puzzle import render
         sol = json.loads(Path(args.solution).read_text(encoding="utf-8"))
         polys = [np.asarray(p, float) for p in sol["polys"]]
