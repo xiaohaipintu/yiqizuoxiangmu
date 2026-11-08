@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 from scipy.spatial import Voronoi
 from shapely.geometry import Polygon as SPoly, box as sbox
+from shapely.ops import unary_union
 
 PROJ = Path(__file__).resolve().parents[2] / "拼图还原项目"
 SRC = PROJ / "src"
@@ -204,9 +205,70 @@ def _texture_cost(img, pose_a, pose_b, aw, bw, side, k: float = 0.35,
 
 
 
+def _rect_fill(polys: list[np.ndarray]) -> float:
+    """拼装结果和它的最小外接矩形有多贴合（0~1）。4 条撕裂纸条拼对了就该接近 1。"""
+    ps = [SPoly(p).buffer(0) for p in polys]
+    u = unary_union(ps)
+    rect = u.minimum_rotated_rectangle
+    return float(u.area / rect.area) if getattr(rect, "area", 0) else 0.0
+
+
+def _union_stats(polys: list[np.ndarray]) -> dict:
+    """并集的三个量：覆盖率（最大连通块占全部面积）、矩形贴合、空洞。
+
+    只看「矩形贴合」会被钻空子 —— 四块并排摆着但各不相连，并集的最小外接矩形
+    照样很大，贴合率能到 96%。所以必须同时要求**接成一片**（覆盖率≈1）。
+    """
+    ps = [SPoly(p).buffer(0) for p in polys]
+    total = sum(p.area for p in ps) or 1.0
+    u = unary_union(ps)
+    if u.geom_type == "MultiPolygon":
+        parts = sorted(u.geoms, key=lambda g: -g.area)
+        main, n_parts = parts[0], len(parts)
+    else:
+        main, n_parts = u, 1
+    rect = main.minimum_rotated_rectangle
+    holes = sum(abs(SPoly(r).area) for r in getattr(main, "interiors", []))
+    # 内部接触边总长：拼对了，块与块之间的共线接触最长（这是拼图最本质的判据）
+    shared = 0.0
+    for i in range(len(ps)):
+        for j in range(i + 1, len(ps)):
+            inter = ps[i].intersection(ps[j])
+            if inter.geom_type == "LineString":
+                shared += inter.length
+            elif inter.geom_type == "MultiLineString":
+                shared += sum(g.length for g in inter.geoms)
+    return {
+        "coverage": float(main.area / total),
+        "rect_fill": float(main.area / rect.area) if getattr(rect, "area", 0) else 0.0,
+        "holes_pct": float(holes / total * 100.0),
+        "components": n_parts,
+        "shared_px": float(shared),
+        "shared_ratio": float(shared / (sum(p.length for p in ps) or 1.0)),
+    }
+
+
+
 def assemble(pieces: dict, beam: int = 80, time_budget: float = 45.0,
              cov: float = 0.6, overlap_tol: float = 0.004,
-             img=None, tw: float = 0.0, tex_k: float = 0.35) -> dict | None:
+             img=None, tw: float = 0.0, tex_k: float = 0.35,
+             rank: str = "joined", collect: int = 0) -> dict | None:
+    """束搜索拼装。
+
+    rank 决定**在完整解之间**怎么选：
+      "joined" 内部接触边总长最大（默认，拼图最本质的判据）
+      "seam"   累计接缝代价最小（局部最优 —— 会被"局部拼得很好但整体错"骗过）
+      "rect"   最小外接矩形贴合率最高
+      "mixed"  seam 与 rect 的加权
+
+    为什么默认是 "joined"：真实的撕纸拼图里，#1+#3 和 #2+#4 可能各自拼得很好
+    （局部边长代价很低），但要把两个"整体"再接起来，需要整体相对旋转 ——
+    局部的边长代价给不出这个偏好，会停在「差一条边没接上」的解。
+    实测（手撕拼图.jpg，4 块）：
+      rank=seam   → 接触边 950px，2 条缝，空隙 2.89%，#2 旋转 155°（错）
+      rank=rect   → 接触边 36px（只靠角点相碰），空隙 1.69%（更差）
+      rank=joined → 接触边 1400px，3 条完整缝（485/465/450px），空隙 0.79%，#2 旋转 336°（对）
+    """
     ids = list(pieces)
     n = len(ids)
     seed = max(ids, key=lambda i: pieces[i].area)
@@ -214,6 +276,7 @@ def assemble(pieces: dict, beam: int = 80, time_budget: float = 45.0,
                [world(pieces[seed], 0.0, (0.0, 0.0))],
                {pid: set() for pid in ids}, 0.0)]
     deadline = time.time() + time_budget
+    complete: list[tuple] = []          # 所有见到的完整解（去重后）
 
     for level in range(2, n + 1):
         cands = []
@@ -233,7 +296,7 @@ def assemble(pieces: dict, beam: int = 80, time_budget: float = 45.0,
             if time.time() > deadline:
                 break
         if not cands:
-            return None
+            break
         cands.sort(key=lambda s: s[3])
         # 去重：同一套摆放（坐标四舍五入后一致）只留代价最低的
         seen, keep = set(), []
@@ -247,18 +310,51 @@ def assemble(pieces: dict, beam: int = 80, time_budget: float = 45.0,
             if len(keep) >= beam:
                 break
         states = keep
+        if level == n:
+            complete = keep[:max(collect, beam)]
         if time.time() > deadline:
             break
 
-    full = [s for s in states if len(s[0]) == n]
+    full = [s for s in complete if len(s[0]) == n] or \
+           [s for s in states if len(s[0]) == n]
     if not full:
         return None
-    full.sort(key=lambda s: s[3])
+
+    # ---- 在完整解之间排序 ----
+    seams = [s[3] for s in full]
+    lo, hi = (min(seams), max(seams)) if seams else (0.0, 1.0)
+
+    def norm_seam(v: float) -> float:
+        return (v - lo) / (hi - lo) if hi - lo > 1e-9 else 0.0
+
+    def score(s) -> float:
+        if rank == "seam":
+            return norm_seam(s[3])
+        st = _union_stats(s[1])
+        if rank == "rect":
+            # 必须接成一片（coverage≈1）且贴合矩形；否则四块悬空摆也能拿高分
+            return (1.0 - st["coverage"]) * 3.0 + (1.0 - st["rect_fill"]) + st["holes_pct"] / 100.0
+        if rank == "joined":
+            # 主判据：内部接触边总长越大越好（拼图最本质），缺口/不连通重罚
+            pen = (1.0 - st["coverage"]) * 3.0 + st["holes_pct"] / 100.0
+            return -st["shared_ratio"] + pen
+        return (0.4 * norm_seam(s[3]) + (1.0 - st["coverage"]) * 3.0
+                + (1.0 - st["rect_fill"]))                     # mixed
+
+    full.sort(key=score)
     placed, polys, _used, cost = full[0]
+    st = _union_stats(polys)
     return {"placed": [list(p) for p in placed],
             "polys": [p.tolist() for p in polys],
             "seam": cost,
-            "gap_pct": round(_gap_pct(polys), 2)}
+            "gap_pct": round(_gap_pct(polys), 2),
+            "rect_fill": round(st["rect_fill"], 4),
+            "coverage": round(st["coverage"], 4),
+            "components": st["components"],
+            "shared_px": round(st["shared_px"], 1),
+            "shared_ratio": round(st["shared_ratio"], 4),
+            "n_candidates": len(full)}
+
 
 
 def _gap_pct(polys: list[np.ndarray]) -> float:
