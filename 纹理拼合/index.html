@@ -204,54 +204,68 @@
     return out;
   }
 
-  /* ---------------- 3) 取四边像素（用于算接缝代价） ---------------- */
+  /* ---------------- 3) 取四边像素（用于算接缝代价） ----------------
+     每侧取 2 列/行：
+       外列 = 真正挨着邻居的那一列，用来算接缝差异
+       内列 = 往里一列，用来算"这块本身在此处的自然变化"，做归一化基线 */
   function edgeOf(imgData) {
     var w = imgData.width;
     var h = imgData.height;
     var d = imgData.data;
-    var L = new Float32Array(h * 3);
-    var R = new Float32Array(h * 3);
-    var T = new Float32Array(w * 3);
-    var B = new Float32Array(w * 3);
+    var Lo = new Float32Array(h * 3), Li = new Float32Array(h * 3);
+    var Ro = new Float32Array(h * 3), Ri = new Float32Array(h * 3);
+    var To = new Float32Array(w * 3), Ti = new Float32Array(w * 3);
+    var Bo = new Float32Array(w * 3), Bi = new Float32Array(w * 3);
+    function cp(buf, i, o) { buf[i] = d[o]; buf[i + 1] = d[o + 1]; buf[i + 2] = d[o + 2]; }
     for (var y = 0; y < h; y++) {
-      var oL = (y * w) * 4;
-      var oR = (y * w + w - 1) * 4;
-      L[y * 3] = d[oL]; L[y * 3 + 1] = d[oL + 1]; L[y * 3 + 2] = d[oL + 2];
-      R[y * 3] = d[oR]; R[y * 3 + 1] = d[oR + 1]; R[y * 3 + 2] = d[oR + 2];
+      var i3 = y * 3;
+      cp(Lo, i3, (y * w) * 4);
+      cp(Li, i3, (y * w + 1) * 4);
+      cp(Ri, i3, (y * w + w - 2) * 4);
+      cp(Ro, i3, (y * w + w - 1) * 4);
     }
     for (var x = 0; x < w; x++) {
-      var oT = x * 4;
-      var oB = ((h - 1) * w + x) * 4;
-      T[x * 3] = d[oT]; T[x * 3 + 1] = d[oT + 1]; T[x * 3 + 2] = d[oT + 2];
-      B[x * 3] = d[oB]; B[x * 3 + 1] = d[oB + 1]; B[x * 3 + 2] = d[oB + 2];
+      var i3b = x * 3;
+      cp(To, i3b, x * 4);
+      cp(Ti, i3b, (w + x) * 4);
+      cp(Bi, i3b, ((h - 2) * w + x) * 4);
+      cp(Bo, i3b, ((h - 1) * w + x) * 4);
     }
-    return { L: L, R: R, T: T, B: B };
+    return { Lo: Lo, Li: Li, Ro: Ro, Ri: Ri, To: To, Ti: Ti, Bo: Bo, Bi: Bi };
   }
 
-  /* a 在左、b 在右：a 的右边缘 与 b 的左边缘 的均方差 */
+  /* a 在左、b 在右。
+     代价 = 接缝处的差异 / 两侧自身的局部变化（+1 防止除以 0）。
+     只比 1 列像素时，大片纯色（天空、墙面）会让"错的拼法"也显得很连续 ——
+     实测真实照片有 8% 这种情况。归一化之后，天空这种"本来就很平"的地方
+     分母小、比值大，就不再被当成好接缝了。 */
   function seamLR(a, b) {
-    var s = 0, n = TILE;
+    var s = 0, ea = 0, eb = 0, n = TILE;
     for (var y = 0; y < n; y++) {
       var i = y * 3;
-      var d0 = a.R[i] - b.L[i];
-      var d1 = a.R[i + 1] - b.L[i + 1];
-      var d2 = a.R[i + 2] - b.L[i + 2];
+      var d0 = a.Ro[i] - b.Lo[i], d1 = a.Ro[i + 1] - b.Lo[i + 1], d2 = a.Ro[i + 2] - b.Lo[i + 2];
       s += d0 * d0 + d1 * d1 + d2 * d2;
+      var g0 = a.Ro[i] - a.Ri[i], g1 = a.Ro[i + 1] - a.Ri[i + 1], g2 = a.Ro[i + 2] - a.Ri[i + 2];
+      ea += g0 * g0 + g1 * g1 + g2 * g2;
+      var h0 = b.Li[i] - b.Lo[i], h1 = b.Li[i + 1] - b.Lo[i + 1], h2 = b.Li[i + 2] - b.Lo[i + 2];
+      eb += h0 * h0 + h1 * h1 + h2 * h2;
     }
-    return s / n;
+    return (s / n) / (0.5 * (ea / n + eb / n) + 1.0);
   }
 
-  /* a 在上、b 在下：a 的下边缘 与 b 的上边缘 的均方差 */
+  /* a 在上、b 在下。同上。 */
   function seamTB(a, b) {
-    var s = 0, n = TILE;
+    var s = 0, ea = 0, eb = 0, n = TILE;
     for (var x = 0; x < n; x++) {
       var i = x * 3;
-      var d0 = a.B[i] - b.T[i];
-      var d1 = a.B[i + 1] - b.T[i + 1];
-      var d2 = a.B[i + 2] - b.T[i + 2];
+      var d0 = a.Bo[i] - b.To[i], d1 = a.Bo[i + 1] - b.To[i + 1], d2 = a.Bo[i + 2] - b.To[i + 2];
       s += d0 * d0 + d1 * d1 + d2 * d2;
+      var g0 = a.Bo[i] - a.Bi[i], g1 = a.Bo[i + 1] - a.Bi[i + 1], g2 = a.Bo[i + 2] - a.Bi[i + 2];
+      ea += g0 * g0 + g1 * g1 + g2 * g2;
+      var h0 = b.Ti[i] - b.To[i], h1 = b.Ti[i + 1] - b.To[i + 1], h2 = b.Ti[i + 2] - b.To[i + 2];
+      eb += h0 * h0 + h1 * h1 + h2 * h2;
     }
-    return s / n;
+    return (s / n) / (0.5 * (ea / n + eb / n) + 1.0);
   }
 
   /* ---------------- 4) 纹理拼合：分支限界搜索最优排列 ---------------- */
