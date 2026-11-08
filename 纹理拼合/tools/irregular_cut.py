@@ -94,11 +94,17 @@ def to_pieces_json(cells: list[np.ndarray]) -> dict:
 #    就被剪掉了（实测 6 块时真解根本不在 beam 里）。
 #    换成边长一致度后，正确的对接会立刻拿到接近 0 的代价。
 # --------------------------------------------------------------------------
-def _expand(pieces, placed, polys, used, qid, cov, overlap_tol):
-    """与 beam_search.expand 同构，额外返回这一对的边长不一致度。"""
+def _expand(pieces, placed, polys, used, qid, cov, overlap_tol,
+            img=None, tw: float = 0.0, tex_k: float = 0.35):
+    """与 beam_search.expand 同构，额外返回这一对的代价。
+
+    代价 = 形状项（边长不一致 + 贴合不完整）+ tw × 纹理项。
+    形状项同时充当**候选生成与硬过滤**：边长差太大、贴合不足、穿透超限的直接丢弃，
+    纹理无权把一个物理上放不进去的摆法救回来。
+    """
     q = pieces[qid]
     out = []
-    for k, (pid, _, _, _) in enumerate(placed):
+    for k, (pid, ang_a, tx_a, ty_a) in enumerate(placed):
         pw = polys[k]
         p = pieces[pid]
         for ei in range(p.n):
@@ -129,15 +135,78 @@ def _expand(pieces, placed, polys, used, qid, cov, overlap_tol):
                     ov = sum(G.poly_overlap_area(wq, pp) for pp in polys)
                     if ov > overlap_tol * q.area:
                         continue
-                    # 这一对的代价：边长差 + 贴合不完整惩罚
+                    # --- 形状项 ---
                     seam = abs(La - Lb) / max(La, Lb)
                     seam += 0.5 * (1.0 - min(1.0, shared / min(La, Lb)))
+                    # --- 纹理项（可选）：形状已放行之后，才用它区分"长度像但拼错" ---
+                    if img is not None and tw:
+                        seam += tw * _texture_cost(
+                            img, (ang_a, tx_a, ty_a), (ang, float(t[0]), float(t[1])),
+                            aw, bw, 1.0 if sa > 0 else -1.0, k=tex_k)
                     out.append((pid, ei, fi, ang, float(t[0]), float(t[1]), wq, seam))
     return out
 
 
+def _sample(img: np.ndarray, pts: np.ndarray) -> np.ndarray:
+    """双线性采样（pts 为原图像素坐标，Nx2）。"""
+    h, w = img.shape[:2]
+    x = np.clip(pts[:, 0], 0, w - 1.001)
+    y = np.clip(pts[:, 1], 0, h - 1.001)
+    x0 = np.floor(x).astype(np.int32)
+    y0 = np.floor(y).astype(np.int32)
+    x1 = np.minimum(x0 + 1, w - 1)
+    y1 = np.minimum(y0 + 1, h - 1)
+    wx = (x - x0)[:, None]
+    wy = (y - y0)[:, None]
+    top = img[y0, x0] * (1 - wx) + img[y0, x1] * wx
+    bot = img[y1, x0] * (1 - wx) + img[y1, x1] * wx
+    return top * (1 - wy) + bot * wy
+
+
+def _texture_cost(img, pose_a, pose_b, aw, bw, side, k: float = 0.35,
+                  samples: int = 24) -> float:
+    """看接缝两侧的像素是否连续（跨缝差 ÷ 块内差）。
+
+    踩过两次坑，都记在这里：
+
+    1) 一开始直接比"跨缝两点的色差"，真邻接也判成 0.54~0.96。因为 Voronoi 切线
+       本身常常压在照片的硬边上，跨 3 像素颜色就能差 2.5 倍 —— 这和拼得对不对无关。
+       所以改成用**块内自身变化**做基线：跨缝跳变 ≈ 块内跳变 → 比值 ≈ 1。
+    2) 采样距离 k 也不能大。k=1.6 时两点相距 3.2px，测的还是"图像在这 3px 里变化多大"，
+       实测分离度只有 0.30×（完全反了）；k=0.35（两点相距 0.7px，等于相邻像素）
+       分离度 21×：真邻接比值最大 4.2，假配对最小 88.5。
+
+    返回 ratio/(ratio+20) 压到 0~1：真邻接 ≈0.13，假配对 ≈0.8~0.95。
+    """
+    u = (bw - aw) / (np.linalg.norm(bw - aw) + 1e-12)
+    n = np.array([-u[1], u[0]], float) * side        # 指向已放那块的内侧
+    ts = np.linspace(0.12, 0.88, samples)[:, None]
+    base = aw[None, :] + (bw - aw)[None, :] * ts     # (N,2) 接缝上的点
+
+    def to_orig(world_pts, pose):
+        ang, tx, ty = pose
+        Rm = G.rotation(-ang)
+        return (Rm @ (world_pts - np.array([tx, ty], float)).T).T
+
+    def sq(a, b):
+        d = a - b
+        return float(np.mean(np.sum(d * d, axis=1)))
+
+    pa1 = _sample(img, to_orig(base + n * k, pose_a))
+    pa2 = _sample(img, to_orig(base + n * 2 * k, pose_a))
+    pb1 = _sample(img, to_orig(base - n * k, pose_b))
+    pb2 = _sample(img, to_orig(base - n * 2 * k, pose_b))
+
+    cross = sq(pa1, pb1)
+    baseline = 0.5 * (sq(pa1, pa2) + sq(pb1, pb2)) + 1.0
+    ratio = cross / baseline
+    return ratio / (ratio + 20.0)
+
+
+
 def assemble(pieces: dict, beam: int = 80, time_budget: float = 45.0,
-             cov: float = 0.6, overlap_tol: float = 0.004) -> dict | None:
+             cov: float = 0.6, overlap_tol: float = 0.004,
+             img=None, tw: float = 0.0, tex_k: float = 0.35) -> dict | None:
     ids = list(pieces)
     n = len(ids)
     seed = max(ids, key=lambda i: pieces[i].area)
@@ -154,7 +223,8 @@ def assemble(pieces: dict, beam: int = 80, time_budget: float = 45.0,
                 if qid in done:
                     continue
                 for pid, ei, fi, ang, tx, ty, wq, seam in _expand(
-                        pieces, placed, polys, used, qid, cov, overlap_tol):
+                        pieces, placed, polys, used, qid, cov, overlap_tol,
+                        img=img, tw=tw, tex_k=tex_k):
                     nu = {k: set(v) for k, v in used.items()}
                     nu[pid].add(ei)
                     nu[qid] = {fi}
@@ -288,8 +358,20 @@ def draw_assembled(polys: list[np.ndarray], path: Path) -> None:
 # --------------------------------------------------------------------------
 # 5) 单张 / 批量
 # --------------------------------------------------------------------------
+def _load_square(path: Path | None, size: int) -> np.ndarray:
+    """读成 size×size 的 RGB（碎片坐标就定义在这个尺度上）。"""
+    if path is None:
+        return np.full((size, size, 3), 128, np.uint8)
+    im = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    if im is None:
+        return np.full((size, size, 3), 128, np.uint8)
+    im = cv2.resize(im, (size, size), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(im, cv2.COLOR_BGR2RGB).astype(np.float32)
+
+
 def one(path: Path | None, n: int, size: int, time_budget: float, outdir: Path,
-        seed: int, use_beam: bool = False) -> dict:
+        seed: int, use_beam: bool = False,
+        texture: bool = False, tw: float = 1.0) -> dict:
     rng = np.random.default_rng(seed)
     cells = voronoi_cut(size, n, rng)
     if len(cells) < 2:
@@ -313,7 +395,9 @@ def one(path: Path | None, n: int, size: int, time_budget: float, outdir: Path,
         n_sol = res.get("n", len(sols))
     else:                              # 本项目：按对接边长一致度排序
         pieces = {int(d["id"]): Piece(d) for d in data["pieces"]}
-        sol = assemble(pieces, beam=80, time_budget=max(10.0, time_budget * 3))
+        img = _load_square(path, size) if texture else None
+        sol = assemble(pieces, beam=80, time_budget=max(10.0, time_budget * 3),
+                       img=img, tw=tw)
         if sol is None:
             return {"ok": False, "error": "没有完整拼法"}
         n_sol = 1
@@ -343,6 +427,10 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=10)
     ap.add_argument("--use-beam", action="store_true",
                     help="对照组：改用项目原来的 beam_search.py（按凸包空隙排序，预期会拼错）")
+    ap.add_argument("--texture", action="store_true",
+                    help="形状过滤之后再叠加纹理代价（默认关，纯形状）")
+    ap.add_argument("--texture-weight", type=float, default=1.0,
+                    help="纹理项权重 tw（代价 = 形状项 + tw × 纹理项）")
     args = ap.parse_args()
 
     if args.bench:
@@ -353,7 +441,8 @@ def main() -> int:
         for i, f in enumerate(photos):
             out = Path(tempfile.gettempdir()) / f"irr_{f.stem}"
             r = one(f, args.n, args.size, args.time, out, seed=i + 1,
-                    use_beam=args.use_beam)
+                    use_beam=args.use_beam, texture=args.texture,
+                    tw=args.texture_weight)
             if r.get("ok"):
                 ok += 1
                 print("%-10s %-6d %-8s %-10s ✓ %d 种拼法，空隙 %s%%"
@@ -370,7 +459,8 @@ def main() -> int:
 
     outdir = Path(args.out) if args.out else Path(tempfile.gettempdir()) / "irregular_demo"
     r = one(Path(args.image) if args.image else None, args.n, args.size,
-            args.time, outdir, args.seed, use_beam=args.use_beam)
+            args.time, outdir, args.seed, use_beam=args.use_beam,
+            texture=args.texture, tw=args.texture_weight)
     print(json.dumps(r, ensure_ascii=False, indent=2))
     print("输出目录：", outdir)
     return 0 if r.get("ok") else 1

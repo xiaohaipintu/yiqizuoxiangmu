@@ -1,8 +1,8 @@
 {
   "ok": true,
   "max_rel_dist_err": 0.0,
-  "seam": 0.0,
+  "seam": 0.570830727836733,
   "gap_pct": 0.0,
-  "pieces": 5,
-  "seconds": 2.9
+  "pieces": 6,
+  "seconds": 10.8
 }
