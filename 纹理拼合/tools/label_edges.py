@@ -31,13 +31,17 @@ COLORS = [(60, 90, 240), (60, 200, 100), (240, 140, 60), (220, 80, 220),
 
 
 def put_label(img, text, center, scale, fg, pad_inward=None):
-    """白描边 + 彩色填充的文字，居中在 center。"""
+    """黑描边 + 彩色填充的文字，居中在 center。
+
+    原来用白描边：白纸上描边根本看不见，只剩彩色字贴着白底，很难认。
+    改成黑描边：白纸上有黑边、黑底上靠彩色字，两种背景都清楚。
+    """
     font = cv2.FONT_HERSHEY_SIMPLEX
     thick = max(2, int(round(scale * 4)))
     (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
     x = int(center[0] - tw / 2)
     y = int(center[1] + th / 2)
-    cv2.putText(img, text, (x, y), font, scale, (255, 255, 255), thick + 5, cv2.LINE_AA)
+    cv2.putText(img, text, (x, y), font, scale, (0, 0, 0), thick + 6, cv2.LINE_AA)
     cv2.putText(img, text, (x, y), font, scale, fg, thick, cv2.LINE_AA)
 
 
@@ -56,8 +60,7 @@ def main() -> int:
     pieces = to_pieces_json(cells)["pieces"]
 
     out = src.copy()
-    # 半透明压暗一点，让彩色标注更突出
-    out = (out * 0.45 + 255 * 0.0).astype(np.uint8)
+    out = src.copy()          # 用原图原亮度，不再压暗
 
     rows = []
     for p in pieces:
@@ -94,7 +97,6 @@ def main() -> int:
                 (24, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 6, cv2.LINE_AA)
     cv2.putText(out, "edge names: number + letter  (letter in vertex order)",
                 (24, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (30, 30, 30), 3, cv2.LINE_AA)
-
     outdir = Path(args.out)
     imwrite_u(outdir / args.name, out)
     (outdir / "edges.json").write_text(
