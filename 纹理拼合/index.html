@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>纹理拼合 · 生成正方形图 → 切 9 块 → 按纹理拼回</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #131c2f;
+    --line: #334155;
+    --text: #e2e8f0;
+    --dim: #94a3b8;
+    --accent1: #38bdf8;
+    --accent2: #a855f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    padding: 18px 14px 40px;
+    background: radial-gradient(1200px 700px at 50% -10%, #17223a, var(--bg));
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+  h1 { margin: 6px 0 0; font-size: clamp(1.1rem, 3.6vw, 1.5rem); }
+  .sub { margin: 0; color: var(--dim); font-size: .82rem; text-align: center; line-height: 1.6; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .btn {
+    min-height: 42px;
+    padding: 0 16px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: .9rem;
+    cursor: pointer;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn.primary {
+    border-color: transparent;
+    background: linear-gradient(150deg, var(--accent1), var(--accent2));
+    color: #08111f;
+    font-weight: 700;
+  }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    width: min(96vw, 900px);
+  }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+    padding: 12px;
+  }
+  .card h2 {
+    margin: 0 0 8px;
+    font-size: .86rem;
+    font-weight: 600;
+    color: var(--dim);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .card h2 b { color: var(--text); }
+  canvas { width: 100%; display: block; border-radius: 6px; background: #0b1220; }
+  .report {
+    width: min(96vw, 900px);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+    padding: 12px 14px;
+    font-size: .8rem;
+    line-height: 1.75;
+    color: var(--dim);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .ok { color: #4ade80; }
+  .bad { color: #f87171; }
+  .tag { color: var(--accent1); }
+</style>
+</head>
+<body>
+  <h1>纹理拼合</h1>
+  <p class="sub">
+    生成一张正方形图 → 切成 3×3 = 9 块 → 随机打乱<br />
+    然后<b>只看边缘像素的连续性</b>（不看位置、不知道原图排布），把 9 块拼回去
+  </p>
+
+  <div class="controls">
+    <button class="btn primary" id="btn-run" type="button">生成 → 拆分 → 打乱 → 纹理拼合</button>
+    <button class="btn" id="btn-again" type="button">换一张图再来</button>
+    <button class="btn" id="btn-num" type="button">显示块编号</button>
+  </div>
+
+  <div class="board">
+    <div class="card">
+      <h2><span>① 打乱后</span><b id="tag-shuffled">—</b></h2>
+      <canvas id="cv-shuffled" width="600" height="600"></canvas>
+    </div>
+    <div class="card">
+      <h2><span>② 纹理拼合结果</span><b id="tag-solved">—</b></h2>
+      <canvas id="cv-solved" width="600" height="600"></canvas>
+    </div>
+  </div>
+
+  <pre class="report" id="report">点上面的按钮开始。</pre>
+
+<script>
+(function () {
+  'use strict';
+
+  var N = 3;                 // 3×3
+  var SIZE = 600;            // 正方形图片边长
+  var TILE = SIZE / N;       // 每块边长 200
+
+  var cvShuffled = document.getElementById('cv-shuffled');
+  var cvSolved = document.getElementById('cv-solved');
+  var reportEl = document.getElementById('report');
+  var tagShuffled = document.getElementById('tag-shuffled');
+  var tagSolved = document.getElementById('tag-solved');
+  var btnRun = document.getElementById('btn-run');
+  var btnAgain = document.getElementById('btn-again');
+  var btnNum = document.getElementById('btn-num');
+
+  var state = {
+    source: null,      // 原图 canvas
+    tiles: [],         // 9 个 ImageData，索引 = 它在原图的格子号（左上→右下的行优先）
+    order: [],         // 打乱后：order[位置] = 块号
+    solved: null,      // 拼合结果 {order, cost, seams, ms}
+    showNum: false
+  };
+
+  /* ---------------- 1) 生成一张有丰富纹理的正方形图 ---------------- */
+  function makeImage() {
+    var cv = document.createElement('canvas');
+    cv.width = cv.height = SIZE;
+    var g = cv.getContext('2d');
+
+    // 底色渐变
+    var lg = g.createLinearGradient(0, 0, SIZE, SIZE);
+    lg.addColorStop(0, '#0ea5e9');
+    lg.addColorStop(0.5, '#4f46e5');
+    lg.addColorStop(1, '#a855f7');
+    g.fillStyle = lg;
+    g.fillRect(0, 0, SIZE, SIZE);
+
+    // 色块：形状跨越切缝，纹理才有连续性可比
+    var palette = ['#fde68a', '#f97316', '#ef4444', '#22c55e', '#14b8a6',
+                   '#e879f9', '#fafafa', '#1e293b'];
+    for (var i = 0; i < 46; i++) {
+      g.beginPath();
+      var cx = Math.random() * SIZE;
+      var cy = Math.random() * SIZE;
+      var r = 24 + Math.random() * 92;
+      g.fillStyle = palette[Math.floor(Math.random() * palette.length)];
+      g.globalAlpha = 0.35 + Math.random() * 0.55;
+      if (Math.random() < 0.5) {
+        g.arc(cx, cy, r, 0, Math.PI * 2);
+      } else {
+        g.rect(cx - r, cy - r * 0.6, r * 2, r * 1.2);
+      }
+      g.fill();
+    }
+    g.globalAlpha = 1;
+
+    // 斜线束：高频信息，让接缝匹配更"尖锐"
+    g.lineWidth = 2;
+    for (var k = 0; k < 60; k++) {
+      g.strokeStyle = 'rgba(' + (Math.random() < 0.5 ? '255,255,255' : '8,15,32') +
+                      ',' + (0.12 + Math.random() * 0.3).toFixed(2) + ')';
+      g.beginPath();
+      var x0 = Math.random() * SIZE;
+      var y0 = Math.random() * SIZE;
+      var len = 40 + Math.random() * 180;
+      var ang = Math.random() * Math.PI;
+      g.moveTo(x0, y0);
+      g.lineTo(x0 + Math.cos(ang) * len, y0 + Math.sin(ang) * len);
+      g.stroke();
+    }
+
+    return cv;
+  }
+
+  /* ---------------- 2) 切成 9 块 ---------------- */
+  function sliceTiles(src) {
+    var g = src.getContext('2d');
+    var out = [];
+    for (var idx = 0; idx < N * N; idx++) {
+      var r = Math.floor(idx / N);
+      var c = idx % N;
+      out.push(g.getImageData(c * TILE, r * TILE, TILE, TILE));
+    }
+    return out;
+  }
+
+  /* ---------------- 3) 取四边像素（用于算接缝代价） ---------------- */
+  function edgeOf(imgData) {
+    var w = imgData.width;
+    var h = imgData.height;
+    var d = imgData.data;
+    var L = new Float32Array(h * 3);
+    var R = new Float32Array(h * 3);
+    var T = new Float32Array(w * 3);
+    var B = new Float32Array(w * 3);
+    for (var y = 0; y < h; y++) {
+      var oL = (y * w) * 4;
+      var oR = (y * w + w - 1) * 4;
+      L[y * 3] = d[oL]; L[y * 3 + 1] = d[oL + 1]; L[y * 3 + 2] = d[oL + 2];
+      R[y * 3] = d[oR]; R[y * 3 + 1] = d[oR + 1]; R[y * 3 + 2] = d[oR + 2];
+    }
+    for (var x = 0; x < w; x++) {
+      var oT = x * 4;
+      var oB = ((h - 1) * w + x) * 4;
+      T[x * 3] = d[oT]; T[x * 3 + 1] = d[oT + 1]; T[x * 3 + 2] = d[oT + 2];
+      B[x * 3] = d[oB]; B[x * 3 + 1] = d[oB + 1]; B[x * 3 + 2] = d[oB + 2];
+    }
+    return { L: L, R: R, T: T, B: B };
+  }
+
+  /* a 在左、b 在右：a 的右边缘 与 b 的左边缘 的均方差 */
+  function seamLR(a, b) {
+    var s = 0, n = TILE;
+    for (var y = 0; y < n; y++) {
+      var i = y * 3;
+      var d0 = a.R[i] - b.L[i];
+      var d1 = a.R[i + 1] - b.L[i + 1];
+      var d2 = a.R[i + 2] - b.L[i + 2];
+      s += d0 * d0 + d1 * d1 + d2 * d2;
+    }
+    return s / n;
+  }
+
+  /* a 在上、b 在下：a 的下边缘 与 b 的上边缘 的均方差 */
+  function seamTB(a, b) {
+    var s = 0, n = TILE;
+    for (var x = 0; x < n; x++) {
+      var i = x * 3;
+      var d0 = a.B[i] - b.T[i];
+      var d1 = a.B[i + 1] - b.T[i + 1];
+      var d2 = a.B[i + 2] - b.T[i + 2];
+      s += d0 * d0 + d1 * d1 + d2 * d2;
+    }
+    return s / n;
+  }
+
+  /* ---------------- 4) 纹理拼合：分支限界搜索最优排列 ---------------- */
+  function solveByTexture(tiles) {
+    var n = N * N;
+    var edges = tiles.map(edgeOf);
+
+    // 预计算所有边对代价
+    var hCost = [];   // hCost[a][b]：a 放左边、b 放右边
+    var vCost = [];   // vCost[a][b]：a 放上边、b 放下边
+    for (var a = 0; a < n; a++) {
+      hCost[a] = [];
+      vCost[a] = [];
+      for (var b = 0; b < n; b++) {
+        hCost[a][b] = (a === b) ? Infinity : seamLR(edges[a], edges[b]);
+        vCost[a][b] = (a === b) ? Infinity : seamTB(edges[a], edges[b]);
+      }
+    }
+
+    var t0 = performance.now();
+    var bestCost = Infinity;
+    var bestOrder = null;
+    var used = new Array(n).fill(false);
+    var pos = new Array(n).fill(-1);
+
+    // 按位置 0..8 逐格填，已经确定左边/上边的先累加代价，超界就剪枝
+    (function dfs(k, cost) {
+      if (cost >= bestCost) return;
+      if (k === n) {
+        bestCost = cost;
+        bestOrder = pos.slice();
+        return;
+      }
+      var r = Math.floor(k / N);
+      var c = k % N;
+      for (var t = 0; t < n; t++) {
+        if (used[t]) continue;
+        var add = 0;
+        if (c > 0) add += hCost[pos[k - 1]][t];
+        if (r > 0) add += vCost[pos[k - N]][t];
+        if (cost + add >= bestCost) continue;
+        used[t] = true;
+        pos[k] = t;
+        dfs(k + 1, cost + add);
+        used[t] = false;
+        pos[k] = -1;
+      }
+    })(0, 0);
+
+    var ms = performance.now() - t0;
+
+    // 逐缝列出代价，方便判断"有多确信"
+    var seams = [];
+    for (var kk = 0; kk < n; kk++) {
+      var rr = Math.floor(kk / N);
+      var cc = kk % N;
+      if (cc > 0) {
+        seams.push({ dir: '横', at: bestOrder[kk - 1] + '|' + bestOrder[kk],
+                     cost: hCost[bestOrder[kk - 1]][bestOrder[kk]] });
+      }
+      if (rr > 0) {
+        seams.push({ dir: '竖', at: bestOrder[kk - N] + '|' + bestOrder[kk],
+                     cost: vCost[bestOrder[kk - N]][bestOrder[kk]] });
+      }
+    }
+
+    return { order: bestOrder, cost: bestCost, seams: seams, ms: ms, hCost: hCost, vCost: vCost };
+  }
+
+  /* ---------------- 5) 打乱 ---------------- */
+  function shuffleOrder() {
+    var order = [];
+    for (var i = 0; i < N * N; i++) order.push(i);
+    do {
+      for (var j = order.length - 1; j > 0; j--) {
+        var k = Math.floor(Math.random() * (j + 1));
+        var tmp = order[j]; order[j] = order[k]; order[k] = tmp;
+      }
+    } while (order.every(function (v, i) { return v === i; }));   // 别一上来就是对的
+    return order;
+  }
+
+  /* ---------------- 6) 绘制 ---------------- */
+  function drawBoard(canvas, order, seamInfo) {
+    var g = canvas.getContext('2d');
+    g.clearRect(0, 0, SIZE, SIZE);
+    for (var k = 0; k < N * N; k++) {
+      var t = order[k];
+      var r = Math.floor(k / N);
+      var c = k % N;
+      g.putImageData(state.tiles[t], c * TILE, r * TILE);
+    }
+    if (state.showNum) {
+      g.font = '700 26px ui-monospace, Consolas, monospace';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      for (var k2 = 0; k2 < N * N; k2++) {
+        var r2 = Math.floor(k2 / N);
+        var c2 = k2 % N;
+        var label = '#' + order[k2];
+        var cx = c2 * TILE + TILE / 2;
+        var cy = r2 * TILE + TILE / 2;
+        g.lineWidth = 4;
+        g.strokeStyle = 'rgba(0,0,0,.75)';
+        g.strokeText(label, cx, cy);
+        g.fillStyle = '#fff';
+        g.fillText(label, cx, cy);
+      }
+    }
+    // 把接缝画出来：代价越小越绿，越大越红
+    if (seamInfo) {
+      g.lineWidth = 3;
+      for (var s = 0; s < seamInfo.length; s++) {
+        var it = seamInfo[s];
+        var cost = it.cost;
+        var hue = Math.max(0, Math.min(120, 120 - cost / 3));   // 小代价→绿
+        g.strokeStyle = 'hsla(' + hue + ',85%,55%,.85)';
+        if (it.dir === '横') {
+          var idx = it.at.split('|');
+          // 位置：找到右侧那块的位置
+          var pRight = order.indexOf(Number(idx[1]));
+          var cc = pRight % N;
+          g.beginPath();
+          g.moveTo(cc * TILE, 0);
+          g.lineTo(cc * TILE, SIZE);
+          g.stroke();
+        } else {
+          var idx2 = it.at.split('|');
+          var pDown = order.indexOf(Number(idx2[1]));
+          var rr = Math.floor(pDown / N);
+          g.beginPath();
+          g.moveTo(0, rr * TILE);
+          g.lineTo(SIZE, rr * TILE);
+          g.stroke();
+        }
+      }
+    }
+  }
+
+  /* ---------------- 7) 主流程 ---------------- */
+  function run() {
+    state.source = makeImage();
+    state.tiles = sliceTiles(state.source);
+    state.order = shuffleOrder();
+
+    var res = solveByTexture(state.tiles);
+    state.solved = res;
+
+    drawBoard(cvShuffled, state.order, null);
+    drawBoard(cvSolved, res.order, res.seams);
+
+    tagShuffled.textContent = '块序 ' + state.order.join(',');
+    tagSolved.textContent = res.ms.toFixed(1) + ' ms';
+
+    // 判定：因为图是我们自己生成的，正确顺序就是 0..8
+    var identity = [];
+    for (var i = 0; i < N * N; i++) identity.push(i);
+    var right = res.order.every(function (v, i) { return v === identity[i]; });
+
+    // 正确配对的接缝代价 vs 全部可能边对的平均代价 —— 差距越大越"确信"
+    var seamCosts = res.seams.map(function (s) { return s.cost; });
+    var avgSeam = seamCosts.reduce(function (a, b) { return a + b; }, 0) / seamCosts.length;
+    var all = [];
+    for (var a = 0; a < N * N; a++) {
+      for (var b = 0; b < N * N; b++) {
+        if (a !== b) { all.push(res.hCost[a][b]); all.push(res.vCost[a][b]); }
+      }
+    }
+    all.sort(function (x, y) { return x - y; });
+    var medianAll = all[Math.floor(all.length / 2)];
+
+    var lines = [];
+    lines.push('原图 ' + SIZE + '×' + SIZE + ' → 切成 ' + N + '×' + N +
+               '，每块 ' + TILE + '×' + TILE);
+    lines.push('搜索：' + res.ms.toFixed(1) + ' ms（分支限界，遍历所有不冲突排列）');
+    lines.push('拼合结果：' + (right ? '✓ 与原图完全一致（0..8）' : '✗ 顺序不对：' + res.order.join(',')));
+    lines.push('');
+    lines.push('总接缝代价 ' + res.cost.toFixed(2) + '，平均每条缝 ' + avgSeam.toFixed(2));
+    lines.push('对照：任意两块硬拼的代价中位数 ' + medianAll.toFixed(2) +
+               '，倍数 ≈ ' + (medianAll / Math.max(avgSeam, 1e-9)).toFixed(1) + '×');
+    lines.push('');
+    lines.push('逐缝代价（越小越像同一张图切开的）：');
+    res.seams.sort(function (x, y) { return y.cost - x.cost; }).forEach(function (s) {
+      lines.push('  ' + s.dir + '缝 ' + s.at.padEnd(6, ' ') + '  ' + s.cost.toFixed(2));
+    });
+    reportEl.innerHTML = lines.join('\n')
+      .replace(/(✓[^\n]*)/g, '<span class="ok">$1</span>')
+      .replace(/(✗[^\n]*)/g, '<span class="bad">$1</span>');
+  }
+
+  btnRun.addEventListener('click', run);
+  btnAgain.addEventListener('click', run);
+  btnNum.addEventListener('click', function () {
+    state.showNum = !state.showNum;
+    btnNum.textContent = state.showNum ? '隐藏块编号' : '显示块编号';
+    if (state.solved) {
+      drawBoard(cvShuffled, state.order, null);
+      drawBoard(cvSolved, state.solved.order, state.solved.seams);
+    }
+  });
+})();
+</script>
+</body>
+</html>
