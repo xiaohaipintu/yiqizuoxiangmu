@@ -288,15 +288,6 @@ def draw_assembled(polys: list[np.ndarray], path: Path) -> None:
 # --------------------------------------------------------------------------
 # 5) 单张 / 批量
 # --------------------------------------------------------------------------
-def load_square(path: Path | None, size: int) -> np.ndarray:
-    if path is None:
-        return np.full((size, size, 3), 128, np.uint8)
-    im = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
-    if im is None:
-        return np.full((size, size, 3), 128, np.uint8)
-    return cv2.resize(im, (size, size), interpolation=cv2.INTER_AREA)
-
-
 def one(path: Path | None, n: int, size: int, time_budget: float, outdir: Path,
         seed: int, use_beam: bool = False) -> dict:
     rng = np.random.default_rng(seed)
@@ -350,6 +341,8 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--bench", action="store_true", help="跑 照片/ 目录的批量基准")
     ap.add_argument("--limit", type=int, default=10)
+    ap.add_argument("--use-beam", action="store_true",
+                    help="对照组：改用项目原来的 beam_search.py（按凸包空隙排序，预期会拼错）")
     args = ap.parse_args()
 
     if args.bench:
@@ -359,7 +352,8 @@ def main() -> int:
         print("-" * 56)
         for i, f in enumerate(photos):
             out = Path(tempfile.gettempdir()) / f"irr_{f.stem}"
-            r = one(f, args.n, args.size, args.time, out, seed=i + 1)
+            r = one(f, args.n, args.size, args.time, out, seed=i + 1,
+                    use_beam=args.use_beam)
             if r.get("ok"):
                 ok += 1
                 print("%-10s %-6d %-8s %-10s ✓ %d 种拼法，空隙 %s%%"
@@ -376,7 +370,7 @@ def main() -> int:
 
     outdir = Path(args.out) if args.out else Path(tempfile.gettempdir()) / "irregular_demo"
     r = one(Path(args.image) if args.image else None, args.n, args.size,
-            args.time, outdir, args.seed)
+            args.time, outdir, args.seed, use_beam=args.use_beam)
     print(json.dumps(r, ensure_ascii=False, indent=2))
     print("输出目录：", outdir)
     return 0 if r.get("ok") else 1
