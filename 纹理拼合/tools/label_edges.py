@@ -1,6 +1,6 @@
 """给每个碎片的每条边取名字并画出来（诊断用）。
 
-命名规则：`#块号-边号`，边号按多边形顶点顺序 A、B、C……循环。
+命名规则：`块号+边号`（只有数字和字母），边号按多边形顶点顺序 A、B、C……循环。
 标签画在边的中点、朝块内偏移一点，白底描边，黑底/白纸都看得清。
 同时打印一张表：边名、长度、起点、终点、方向角、中点。
 
@@ -66,7 +66,7 @@ def main() -> int:
         n = len(poly)
         centroid = poly.mean(axis=0)
         for i, e in enumerate(p["edges"]):
-            name = "#%d-%s" % (pid, LETTERS[i])
+            name = "%d%s" % (pid, LETTERS[i])
             a = np.asarray(e["a"], float)
             b = np.asarray(e["b"], float)
             col = COLORS[i % len(COLORS)]
@@ -90,9 +90,9 @@ def main() -> int:
             })
 
     # 顶部加一行说明
-    cv2.putText(out, "edge names: #piece-letter  (A,B,C... in vertex order)",
+    cv2.putText(out, "edge names: number + letter  (letter in vertex order)",
                 (24, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 6, cv2.LINE_AA)
-    cv2.putText(out, "edge names: #piece-letter  (A,B,C... in vertex order)",
+    cv2.putText(out, "edge names: number + letter  (letter in vertex order)",
                 (24, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (30, 30, 30), 3, cv2.LINE_AA)
 
     outdir = Path(args.out)
