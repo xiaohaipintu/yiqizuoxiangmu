@@ -228,9 +228,6 @@ def main() -> int:
     ap.add_argument("--overlap", type=float, default=0.02,
                     help="允许的穿透比例（占块面积；手撕边近似为直线后会轻微重叠）")
     ap.add_argument("--texture-weight", type=float, default=1.0)
-    ap.add_argument("--rank", default="joined",
-                    choices=["joined", "seam", "rect", "mixed"],
-                    help="完整解之间的排序准则（joined=内部接触边最长，推荐）")
     ap.add_argument("--tex-k", type=float, default=4.0,
                     help="纹理采样距离（px）。拆开的纸片边缘有暗边带，太小会被暗边带偏")
     args = ap.parse_args()
@@ -267,8 +264,7 @@ def main() -> int:
     for tag, tw in (("纯形状", 0.0), ("形状+纹理", args.texture_weight)):
         sol = assemble(pieces, beam=args.beam, time_budget=args.time,
                        cov=args.cov, overlap_tol=args.overlap,
-                       img=(img_rgb if tw else None), tw=tw, tex_k=args.tex_k,
-                       rank=args.rank)
+                       img=(img_rgb if tw else None), tw=tw, tex_k=args.tex_k)
         if sol is None:
             print("%-9s 没有完整拼法" % tag)
             results[tag] = None
@@ -280,12 +276,10 @@ def main() -> int:
         name = "2_拼合结果_纯形状.jpg" if tw == 0 else "2_拼合结果_形状加纹理.jpg"
         imwrite_u(outdir / name, effect)
         print("%-9s 代价=%.3f  空隙=%.2f%%  重叠=%.2f%%  空洞=%.2f%%  矩形贴合=%.1f%%  "
-              "接触边=%.0fpx  接缝=%d 笔迹不连续=%.1f%%  → %s"
+              "接缝=%d 笔迹不连续=%.1f%%  → %s"
               % (tag, sol["seam"], sol["gap_pct"], q["overlap_pct"], q["holes_pct"],
-                 q["rect_fill_pct"], sol.get("shared_px", 0.0), ic["seams"],
-                 ic["mismatch_pct"], name))
+                 q["rect_fill_pct"], ic["seams"], ic["mismatch_pct"], name))
         results[tag] = {"seam": sol["seam"], "gap_pct": sol["gap_pct"], **q, **ic,
-                        "shared_px": sol.get("shared_px"), "rank": args.rank,
                         "file": name}
         (outdir / ("solution_纯形状.json" if tw == 0 else "solution_形状加纹理.json")).write_text(
             json.dumps({"placed": sol["placed"], "polys": sol["polys"],
