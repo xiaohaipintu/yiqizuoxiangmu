@@ -1,6 +1,10 @@
 # Reasonix 工具缓存（不属于项目内容）
 .reasonix/
 
+# Python 字节码缓存
+__pycache__/
+*.pyc
+
 # 操作系统 / 编辑器
 Thumbs.db
 Desktop.ini
