@@ -30,14 +30,18 @@ from irregular_cut import assemble, to_pieces_json  # noqa: E402
 
 
 def imread_u(path: Path) -> np.ndarray:
-    return cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    """读图。cv2.imread / np.fromfile 在 Windows 下对中文路径都不稳，统一用 Python 读字节。"""
+    data = np.frombuffer(Path(path).read_bytes(), dtype=np.uint8)
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
 
 def imwrite_u(path: Path, img: np.ndarray) -> None:
+    """写图。同上，imencode 之后用 Python 自己写文件，避开中文路径。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     ok, buf = cv2.imencode(path.suffix or ".png", img)
-    if ok:
-        buf.tofile(str(path))
+    if not ok:
+        raise RuntimeError("imencode 失败：%s" % path)
+    Path(path).write_bytes(buf.tobytes())
 
 
 # --------------------------------------------------------------------------
@@ -69,7 +73,19 @@ def segment(img: np.ndarray, th: int, min_area: float, eps_ratio: float):
 # --------------------------------------------------------------------------
 # 2) 渲染：把每块按解出的位姿贴回真实像素
 # --------------------------------------------------------------------------
-def render(img: np.ndarray, pieces: dict, sol: dict, margin: int = 24):
+def _put_label(img: np.ndarray, text: str, cx: int, cy: int,
+               scale: float, col: tuple[int, int, int] = (40, 30, 10)) -> None:
+    """在白纸上画字：先白色粗描边再填深色，黑白底都能看清。"""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    thick = max(3, int(round(scale * 4)))
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+    org = (int(cx - tw / 2), int(cy + th / 2))
+    cv2.putText(img, text, org, font, scale, (255, 255, 255), thick + 4, cv2.LINE_AA)
+    cv2.putText(img, text, org, font, scale, col, thick, cv2.LINE_AA)
+
+
+def render(img: np.ndarray, pieces: dict, sol: dict, margin: int = 24,
+           labels: bool = True):
     polys = [np.asarray(p, float) for p in sol["polys"]]
     poses = [(float(it[1]), float(it[2]), float(it[3])) for it in sol["placed"]]
     ids = [int(it[0]) for it in sol["placed"]]
@@ -90,6 +106,13 @@ def render(img: np.ndarray, pieces: dict, sol: dict, margin: int = 24):
         mask = np.zeros((h, w), np.uint8)
         cv2.fillPoly(mask, [np.round(poly_w - off).astype(np.int32)], 255)
         canvas[mask > 0] = warped[mask > 0]
+
+    if labels:
+        # 每块在拼合结果上的名称（画在它自己的质心处）
+        scale = max(0.8, min(2.4, w / 700.0))
+        for pid, poly_w in zip(ids, polys):
+            c = (poly_w - off).mean(axis=0)
+            _put_label(canvas, "#%d" % pid, int(c[0]), int(c[1]), scale)
     return canvas
 
 
@@ -102,11 +125,7 @@ def draw_labels(img: np.ndarray, cells: list[np.ndarray]) -> np.ndarray:
         col = palette[i % len(palette)]
         cv2.polylines(out, [p], True, col, 3, cv2.LINE_AA)
         c = poly.mean(axis=0).astype(int)
-        s = str(i + 1)
-        cv2.putText(out, s, (c[0] - 16, c[1] + 18), cv2.FONT_HERSHEY_SIMPLEX,
-                    1.7, (0, 0, 0), 7, cv2.LINE_AA)
-        cv2.putText(out, s, (c[0] - 16, c[1] + 18), cv2.FONT_HERSHEY_SIMPLEX,
-                    1.7, col, 3, cv2.LINE_AA)
+        _put_label(out, "#%d" % (i + 1), int(c[0]), int(c[1]), 1.7, col)
     return out
 
 

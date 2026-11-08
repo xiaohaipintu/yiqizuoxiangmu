@@ -90,7 +90,7 @@ python 纹理拼合/tools/handmade_puzzle.py --image 手撕拼图.jpg --out 纹�
        --tex-k 4 --cov 0.35 --overlap 0.02
 ```
 
-产物：`3_对比效果图.jpg`（左原图带编号 / 右拼合结果）、`2_拼合结果_*.jpg`、`solution_*.json`、`report.json`。
+产物：`3_对比效果图.jpg`（左原图 / 右拼合结果，**两边都带 `#1`~`#4` 碎片编号**）、`2_拼合结果_*.jpg`、`solution_*.json`、`report.json`。
 
 **分割很简单**：黑底 + 白纸，灰度阈值 100 就得到干净的 4 块（笔迹是深蓝、低于阈值，用外轮廓重填补洞）。
 
