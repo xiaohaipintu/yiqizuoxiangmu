@@ -53,13 +53,52 @@ def main() -> int:
     ap.add_argument("--min-area", type=float, default=20000)
     ap.add_argument("--eps", type=float, default=0.02)
     ap.add_argument("--name", default="6_碎片边编号.jpg")
+    ap.add_argument("--solution", default=None,
+                    help="给了就把边名画在「拼合结果」上（而不是画在原图上）")
+    ap.add_argument("--zoom", type=float, default=0.0,
+                    help="画在拼合结果上时的放大倍数（0=自动放大到 1400 宽）")
     args = ap.parse_args()
 
     src = imread_u(Path(args.image))
     cells, _ = segment(src, args.th, args.min_area, args.eps)
     pieces = to_pieces_json(cells)["pieces"]
 
-    out = src.copy()
+    if args.solution:
+        # 在拼合结果上标注：用解里的世界位姿，把每块的边画在成品图上
+        import json
+        from handmade_puzzle import render
+        sol = json.loads(Path(args.solution).read_text(encoding="utf-8"))
+        polys = [np.asarray(p, float) for p in sol["polys"]]
+        off = np.vstack(polys).min(axis=0) - 24        # 与 render() 的 margin 一致
+        out = render(src, {}, sol, labels=False)
+        # 成品尺寸只有几百像素，16 个标签会挤在一起 —— 放大后再标
+        S = args.zoom if args.zoom > 0 else max(1.0, 1400.0 / max(1, out.shape[1]))
+        if S > 1.0:
+            out = cv2.resize(out, (int(out.shape[1] * S), int(out.shape[0] * S)),
+                             interpolation=cv2.INTER_CUBIC)
+        scale = max(0.8, min(1.6, out.shape[1] / 900.0))
+        for k, it in enumerate(sol["placed"]):
+            pid = int(it[0])
+            poly = polys[k]
+            centroid = poly.mean(axis=0)
+            for i in range(len(poly)):
+                a, b = poly[i], poly[(i + 1) % len(poly)]
+                if np.linalg.norm(b - a) < 20:
+                    continue
+                col = COLORS[i % len(COLORS)]
+                cv2.line(out, tuple(np.round((a - off) * S).astype(int)),
+                         tuple(np.round((b - off) * S).astype(int)), col,
+                         max(2, int(round(3 * S))), cv2.LINE_AA)
+                mid = (a + b) / 2
+                inward = centroid - mid
+                u = inward / (np.linalg.norm(inward) + 1e-9)
+                put_label(out, "%d%s" % (pid, LETTERS[i]),
+                          (mid + u * 26 - off) * S, scale, col)
+        outdir = Path(args.out)
+        imwrite_u(outdir / args.name, out)
+        print("拼合结果 + 边名 →", outdir / args.name)
+        return 0
+
     out = src.copy()          # 用原图原亮度，不再压暗
 
     rows = []
