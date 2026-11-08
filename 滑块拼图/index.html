@@ -82,7 +82,7 @@
     position: relative;
     width: var(--board);
     height: var(--board);
-    border-radius: 18px;
+    border-radius: 0;
   }
   .board {
     --n: 3;
@@ -91,6 +91,28 @@
     touch-action: none;
   }
   .board.no-anim .tile { transition: none; }
+
+  /* 空格底图（把中间的窟窿填上）与位置标记（仍看得出该往哪走） */
+  .board .holefill {
+    position: absolute;
+    inset: 0;
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    background-position: center;
+    opacity: .55;
+    pointer-events: none;
+  }
+  .board .holemark {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: calc(100% / var(--n));
+    height: calc(100% / var(--n));
+    transition: transform .13s ease-out;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 2px rgba(56,189,248,.55);
+    background: rgba(15,23,42,.16);
+  }
   .tile {
     position: absolute;
     top: 0;
@@ -102,13 +124,13 @@
   }
   .tile .face {
     position: absolute;
-    inset: 3px;
-    border-radius: clamp(6px, 2.2vw, 12px);
+    inset: 0;                       /* 原来是 3px —— 那 3px 就是方块之间的缝隙 */
+    border-radius: 0;               /* 原来 clamp(6px,2.2vw,12px) 圆角 */
     display: grid;
     place-items: center;
     overflow: hidden;
     background: linear-gradient(150deg, var(--accent1), var(--accent2));
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 3px 8px rgba(2,6,23,.45);
+    box-shadow: none;               /* 阴影会盖到邻块上，视觉上又是一条缝 */
     background-repeat: no-repeat;
     background-position: center;
     background-size: cover;
@@ -121,7 +143,7 @@
     font-variant-numeric: tabular-nums;
   }
   .board.pic .tile .num { display: none; }
-  .board.pic .tile .face { box-shadow: 0 3px 8px rgba(2,6,23,.5); }
+  .board.pic .tile .face { box-shadow: none; }
 
   .controls { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; justify-content: center; }
   .btn {
@@ -242,9 +264,10 @@
     </div>
     <button class="btn primary" id="btn-shuffle" type="button">重新打乱</button>
     <button class="btn" id="btn-mode" type="button">切图片</button>
+    <button class="btn" id="btn-tex" type="button">纹理检测</button>
   </div>
 
-  <p class="hint">点空格旁边的方块，或直接滑动屏幕；电脑可用方向键</p>
+  <p class="hint" id="hint">点空格旁边的方块，或直接滑动屏幕；电脑可用方向键</p>
 </main>
 
 <script>
@@ -260,6 +283,8 @@
   var levelsEl = document.getElementById('levels');
   var btnShuffle = document.getElementById('btn-shuffle');
   var btnMode = document.getElementById('btn-mode');
+  var btnTex = document.getElementById('btn-tex');
+  var hintEl = document.getElementById('hint');
   var winAgain = document.getElementById('win-again');
   var subMax = document.getElementById('sub-max');
 
@@ -362,11 +387,23 @@
       var c = i % n;
       rec.el.style.transform = 'translate(' + (c * 100) + '%,' + (r * 100) + '%)';
     }
+    // 空格位置标记跟着走
+    if (game.markEl) {
+      var br = Math.floor(game.blank / n);
+      var bc = game.blank % n;
+      game.markEl.style.transform = 'translate(' + (bc * 100) + '%,' + (br * 100) + '%)';
+    }
   }
 
   function applyMode() {
     var n = game.n;
     boardEl.classList.toggle('pic', game.pic);
+    // 空格底图：两种模式都铺上，图片模式亮一点、数字模式淡一点（不抢数字）
+    if (!game.imgSrc) game.imgSrc = buildPicture();
+    if (game.fillEl) {
+      game.fillEl.style.backgroundImage = 'url("' + game.imgSrc + '")';
+      game.fillEl.style.opacity = game.pic ? '.55' : '.32';
+    }
     for (var v = 1; v < n * n; v++) {
       var rec = game.els[v];
       if (!rec) continue;
@@ -458,6 +495,18 @@
     boardEl.innerHTML = '';
     game.els = {};
     boardEl.style.setProperty('--n', game.n);
+
+    // 窟窿填充：整张图先铺在底下，空格位置就会露出属于它的那一块，不再是黑洞
+    var fill = document.createElement('div');
+    fill.className = 'holefill';
+    boardEl.appendChild(fill);
+    game.fillEl = fill;
+    // 位置标记：填满之后仍要知道空格在哪，否则没法判断该往哪滑
+    var mark = document.createElement('div');
+    mark.className = 'holemark';
+    boardEl.appendChild(mark);
+    game.markEl = mark;
+
     for (var v = 1; v < total(); v++) {
       var el = document.createElement('div');
       el.className = 'tile';
@@ -619,6 +668,51 @@
     newGame(n);
   });
 
+  /* ---------- 纹理检测 ----------
+     拼图能不能「看不出接缝」，取决于两件事：
+       1) 每块贴图取的是原图上正确的那一小格（background-position 与它在原图的格子一致）；
+       2) 贴图的参照框（.face）与方块框完全重合 —— 只要 face 内缩 1px，
+          原图被压缩进更小的框里，相邻两块的图像就对不上，表现为"纹理错位"。
+     这里把两块都量一遍：偏移用百分比比对，面框用 getBoundingClientRect 比对。 */
+  function textureCheck() {
+    var n = game.n;
+    var probs = [];
+    var maxBox = 0;
+    if (!game.pic) {
+      return { ok: false, mode: 'num', maxBox: 0,
+               probs: ['当前是数字模式；切到图片模式后再检测'] };
+    }
+    for (var v = 1; v < n * n; v++) {
+      var rec = game.els[v];
+      if (!rec) continue;
+      var p = v - 1;
+      var r = Math.floor(p / n);
+      var c = p % n;
+      var expX = (c / (n - 1)) * 100;
+      var expY = (r / (n - 1)) * 100;
+
+      var got = (rec.face.style.backgroundPosition || '').replace(/\s+/g, ' ').trim();
+      var nums = got.match(/-?\d+(?:\.\d+)?/g) || [];
+      var okPos = nums.length >= 2
+        && Math.abs(parseFloat(nums[0]) - expX) <= 0.5
+        && Math.abs(parseFloat(nums[1]) - expY) <= 0.5;
+      if (!okPos) {
+        probs.push('块' + v + ' 贴图偏移 ' + (got || '(空)')
+                 + '，应为 ' + expX.toFixed(2) + '% ' + expY.toFixed(2) + '%');
+      }
+
+      var fr = rec.face.getBoundingClientRect();
+      var tr = rec.el.getBoundingClientRect();
+      var dw = Math.abs(tr.width - fr.width);
+      var dh = Math.abs(tr.height - fr.height);
+      maxBox = Math.max(maxBox, dw, dh);
+      if (dw > 1 || dh > 1) {
+        probs.push('块' + v + ' 面带内缩 ' + dw.toFixed(1) + '×' + dh.toFixed(1) + 'px（会出现接缝）');
+      }
+    }
+    return { ok: probs.length === 0, mode: 'pic', maxBox: maxBox, probs: probs };
+  }
+
   btnShuffle.addEventListener('click', shuffle);
   winAgain.addEventListener('click', shuffle);
 
@@ -627,6 +721,23 @@
     if (game.pic && !game.imgSrc) game.imgSrc = buildPicture();
     btnMode.textContent = game.pic ? '切数字' : '切图片';
     applyMode();
+  });
+
+  btnTex.addEventListener('click', function () {
+    if (!game.pic) {                       // 数字模式没有纹理可比，直接切到图片模式再测
+      game.pic = true;
+      if (!game.imgSrc) game.imgSrc = buildPicture();
+      btnMode.textContent = '切数字';
+      applyMode();
+    }
+    var r = textureCheck();
+    var blocks = game.n * game.n - 1;
+    hintEl.textContent = r.ok
+      ? '纹理检测通过：' + blocks + ' 块贴图偏移全部对齐，面框最大偏差 '
+        + r.maxBox.toFixed(2) + 'px —— 拼好后纹理连续、无缝。'
+      : '纹理检测发现 ' + r.probs.length + ' 处问题：' + r.probs.slice(0, 3).join('；')
+        + (r.probs.length > 3 ? ' …（完整结果见控制台）' : '');
+    console.log('[纹理检测]', r);
   });
 
   newGame(3);
